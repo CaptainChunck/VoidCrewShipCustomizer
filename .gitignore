@@ -1,0 +1,14 @@
+# Build output
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userprefs
+
+# Never commit game or BepInEx binaries; the build references them from the local install
+*.dll
+*.pdb
+*.exe
