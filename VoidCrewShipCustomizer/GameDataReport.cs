@@ -84,10 +84,11 @@ namespace VoidCrewShipCustomizer
         private static void WriteHull(StringBuilder text, HullInfo hull)
         {
             text.AppendLine(hull.Name + "  [" + hull.ShipGuid + "]");
-            text.AppendLine("  Loadouts, lowest rank first (the first stands in for CUSTOM with other players):");
+            text.AppendLine("  CUSTOM is built on, and shown to other players as: " + LoadoutStore.PresetName(hull.BasePreset) + "  [" + hull.BasePreset.AssetGuid + "]");
+            text.AppendLine("  Loadouts (the terminal's list first, lowest rank first; then challenge and other loadouts):");
             foreach (ShipLoadoutDataDef preset in hull.Presets)
             {
-                text.AppendLine("    " + LoadoutStore.PresetName(preset) + "  [" + preset.AssetGuid + "]");
+                text.AppendLine("    " + (hull.RegularPresets.Contains(preset) ? "" : "(not listed) ") + LoadoutStore.PresetName(preset) + "  [" + preset.AssetGuid + "]");
             }
 
             text.AppendLine("  Hardpoint positions (" + hull.Sockets.Count + " in " + hull.GroupCount + " hardpoints):");
@@ -116,6 +117,7 @@ namespace VoidCrewShipCustomizer
                     text.AppendLine("    " + LoadoutStore.PresetName(preset) + ":");
                     foreach (ShipSocketEntry socket in loadout.Sockets)
                     {
+                        if (socket == null || socket.Module == null || socket.Module.IsNull) continue;
                         Option option = Catalog.OptionFor(socket);
                         int stocked = socket.Upgrades != null ? socket.Upgrades.Count(u => u != null && !u.IsNull) : 0;
                         text.AppendLine(string.Format("      hardpoint #{0}: {1} ({2}){3}", socket.SocketId, option != null ? option.Name : "?", option != null ? option.Code : socket.Module.AssetGuid.ToString(),

@@ -75,9 +75,15 @@ namespace VoidCrewShipCustomizer
     {
         public GUIDUnion ShipGuid;
         public string Name;
-        /// <summary>The ship's lowest-rank loadout. A Custom loadout is shown to other players as this one.</summary>
+        /// <summary>
+        /// The loadout a CUSTOM loadout is built on (core systems, extra items) and shown to other players as: the game's
+        /// default loadout when it is for this ship (ROOKIE), otherwise the lowest-rank loadout the terminal lists.
+        /// </summary>
         public ShipLoadoutDataDef BasePreset;
+        /// <summary>Every loadout for this ship: the ones the terminal lists first, then challenge and test loadouts.</summary>
         public readonly List<ShipLoadoutDataDef> Presets = new List<ShipLoadoutDataDef>();
+        /// <summary>The loadouts the terminal lists for this ship (the game's rank unlocks), lowest rank first.</summary>
+        public readonly List<ShipLoadoutDataDef> RegularPresets = new List<ShipLoadoutDataDef>();
         public readonly List<SocketInfo> Sockets = new List<SocketInfo>();
         public readonly List<ShelfInfo> Shelves = new List<ShelfInfo>();
         public int GroupCount;
@@ -152,9 +158,35 @@ namespace VoidCrewShipCustomizer
                     Log.Verbose("Skipped a loadout while reading " + hull.Name + ": " + e.Message);
                 }
             }
-            hull.Presets.AddRange(presets.OrderBy(RankRequirement));
-            if (hull.Presets.Count == 0) throw new InvalidOperationException("the game has no loadouts for this ship");
-            hull.BasePreset = hull.Presets[0];
+            if (presets.Count == 0) throw new InvalidOperationException("the game has no loadouts for this ship");
+
+            // The terminal lists the loadouts unlocked by rank; challenge and test loadouts (Artillery Boat, Empty, ...)
+            // are in the same container but never listed, so they must not stand in for CUSTOM.
+            ShipLoadoutDataContainer container = ResourceAssetContainer<ShipLoadoutDataContainer, ShipLoadoutData, ShipLoadoutDataDef>.Instance;
+            var listed = new List<ShipLoadoutDataDef>();
+            try
+            {
+                listed.AddRange(container.GetUnlockedShipDefinitionsFromHighestRankPlayer());
+                listed.AddRange(container.GetLockedShipDefinitionsFromHighestRankPlayer());
+            }
+            catch (Exception e)
+            {
+                Log.Warn("Could not read which loadouts the terminal lists: " + e.Message);
+            }
+            hull.RegularPresets.AddRange(presets.Where(listed.Contains).OrderBy(RankRequirement));
+            hull.Presets.AddRange(hull.RegularPresets);
+            hull.Presets.AddRange(presets.Where(p => !listed.Contains(p)));
+
+            ShipLoadoutDataDef gameDefault = null;
+            try
+            {
+                gameDefault = container.GetDefault();
+            }
+            catch
+            {
+                // fall back to the lowest-rank listed loadout
+            }
+            hull.BasePreset = gameDefault != null && presets.Contains(gameDefault) ? gameDefault : (hull.RegularPresets.FirstOrDefault() ?? presets[0]);
 
             MonoBehaviour shipPrefab = hull.BasePreset.Asset.ShipLoadout.ReferenceShip.Asset;
             if (shipPrefab == null) throw new InvalidOperationException("the ship prefab could not be loaded");

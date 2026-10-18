@@ -144,7 +144,9 @@ namespace VoidCrewShipCustomizer
 
             foreach (ShipSocketEntry socket in loadout.Sockets)
             {
-                if (socket == null || socket.SocketId < 0 || socket.SocketId >= hull.Sockets.Count) continue;
+                // Game loadouts list every hardpoint; the empty ones have no module.
+                if (socket == null || socket.Module == null || socket.Module.IsNull) continue;
+                if (socket.SocketId < 0 || socket.SocketId >= hull.Sockets.Count) continue;
                 Option option = Catalog.OptionFor(socket);
                 if (option != null) config.Slots[socket.SocketId] = option.Code;
                 else Log.Warn("The " + config.CopiedFrom + " loadout has a module the customizer doesn't know (" + socket + "); it is left out of the copy.");
@@ -170,11 +172,20 @@ namespace VoidCrewShipCustomizer
         {
             try
             {
-                return preset.LoadoutContextInfo.HeaderText;
+                string header = preset.LoadoutContextInfo != null ? preset.LoadoutContextInfo.HeaderText : null;
+                if (!string.IsNullOrEmpty(header)) return header;
             }
             catch
             {
-                return "game";
+                // fall back to the asset name
+            }
+            try
+            {
+                return preset.Asset != null ? preset.Asset.name : "loadout";
+            }
+            catch
+            {
+                return "loadout";
             }
         }
 

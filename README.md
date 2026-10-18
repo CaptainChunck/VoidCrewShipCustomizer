@@ -4,8 +4,8 @@ A BepInEx plugin for **Void Crew** that adds a **CUSTOM** loadout to the hub's s
 fitted on every hardpoint of your ship (any weapon or module, any tier), what the ship starts with on its storage racks,
 and which homunculus sits in the Central Computer Cradle.
 
-> Status: **0.1.0, first test build.** It compiles and passes the offline checks, but it has not been tried in the game
-> yet. Please test it in a private game first.
+> Status: **0.2.0, early test build.** 0.1.0 was tried in the game (in VR); 0.2.0 fixes what that test found. Please
+> test it in a private game first.
 
 ## What it does
 
@@ -17,13 +17,15 @@ and which homunculus sits in the Central Computer Cradle.
     an empty 2x1 hardpoint puts it in one half; the other half then shows its own **+**.
   - The game's rule of "only one of these per ship" still applies (marked ONE PER SHIP).
   - "EMPTY THIS HARDPOINT" takes a module off again.
-- **A toolbar** at the top-left of the ship picture:
+- **Buttons above SELECT** (only while CUSTOM is shown):
+  - **HARDPOINTS**: every hardpoint as a big row (port or starboard, bow to aft, with what is fitted). Pick a row to change
+    it. Same choices as clicking the ship picture, without having to hit a small icon, which helps in VR.
   - **STORAGE**: every storage rack and slot. Click a slot to choose an item: ammo, power cells, repair plates,
     materials, animus crates, weapon mods, relics, and **weapon crates** (an inscribed crate that builds that weapon on
     any free hardpoint). Items a rack refuses are greyed out.
   - **HOMUNCULUS**: the standard homunculus, or any Blessed Homunculus from the game's loadouts.
-  - **COPY A LOADOUT**: start from a copy of one of the game's loadouts (ROOKIE, CQB, HEAVY, ...), then change what you
-    like.
+  - **COPY A LOADOUT**: start from a copy of one of the game's loadouts (ROOKIE, CQB, HEAVY, ...), or of a challenge
+    loadout (Artillery Boat, Missile Boat, ...), then change what you like.
   - **EMPTY**: clear the hardpoints, the racks, or everything.
 - Your CUSTOM loadouts are saved per ship in
   `%USERPROFILE%\AppData\LocalLow\Hutlihut Games ApS\Void Crew\ShipCustomizer\custom-loadouts.json`, so they survive
@@ -33,8 +35,8 @@ and which homunculus sits in the Central Computer Cradle.
 
 - **Only the host can choose CUSTOM.** The host's ship is the one that spawns, so it is the host's CUSTOM loadout that
   counts. Other players with the mod see the host's CUSTOM loadout on their terminal (view only); players without the mod
-  see the ship's first loadout (e.g. ROOKIE) as chosen, and get the custom ship when the mission starts. Nobody else needs
-  the mod to play.
+  see ROOKIE as chosen (the game's default loadout, which CUSTOM is built on), and get the custom ship when the mission
+  starts. Nobody else needs the mod to play.
 - **Games with a CUSTOM loadout are marked [mod_session]** in the server list, using the game's own flag for modded
   sessions, so players know before they join. They need "Join modded games" turned on to join.
 - **Progression is paused for CUSTOM runs.** The Void Crew modding rules say sandbox-style mods must turn progression off,
@@ -70,9 +72,11 @@ To remove it, delete the DLL. Your saved CUSTOM loadouts stay in the save folder
 | Diagnostics > WriteGameDataReport | true | The first time you open the terminal, write everything the plugin found to `ShipCustomizer\game-data.txt` in the save folder. |
 | Diagnostics > VerboseLogging | false | Extra detail in the BepInEx log. |
 
-## Known limits of 0.1.0
+## Known limits
 
 - Mouse only: the pop-up lists don't take gamepad navigation yet.
+- VR (with the Void Crew VR UI Fix): the terminal pointer can drift from the click point when you turn your head, so small
+  targets like the hardpoint icons are hard to hit. Use HARDPOINTS instead; its rows are large.
 - The first time the terminal opens, the plugin reads every module and weapon from the game, which can take a second or two.
 - Modules start empty unless one of the game's loadouts also uses them (see CopyPresetModuleContents).
 - Crates sitting unbuilt on a hardpoint in a game loadout are not copied by COPY A LOADOUT.
@@ -89,8 +93,11 @@ of `VoidCrewShipCustomizer\VoidCrewShipCustomizer.csproj`. The output is
 - Each ship gets a `ShipLoadoutDataDef` of its own, backed by a runtime `ShipLoadoutData` registered with the game's
   `RuntimeAssetsRegister` (effect None, so joining players aren't required to have it). The terminal lists, draws and
   describes it with its own code.
-- Picking CUSTOM on the host selects the ship's first loadout in its place (`HubShipManager.SelectShip`), so no other
-  player ever receives an unknown loadout id. The custom choice reaches modded players through the room property
+- A CUSTOM loadout is built on the game's default loadout (`ShipLoadoutDataContainer.GetDefault()`, ROOKIE) when that is
+  for the same ship, otherwise on the lowest-rank loadout the terminal lists. Challenge and test loadouts in the same
+  container are never used for this.
+- Picking CUSTOM on the host selects that loadout in its place (`HubShipManager.SelectShip`), so no other player ever
+  receives an unknown loadout id. The custom choice reaches modded players through the room property
   `SC_Custom`; `SC_Run` marks a mission started with CUSTOM.
 - When the mission starts (`GSIngame.TransitionTo`), the host swaps the session's `ToLoadShipData` for a `ShipLoadout`
   built from the CUSTOM choices. The game's own `ShipLoadout.InitializeShip` spawns it, so every player sees the same ship.

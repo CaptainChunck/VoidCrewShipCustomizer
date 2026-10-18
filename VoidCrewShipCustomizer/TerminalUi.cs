@@ -146,7 +146,7 @@ namespace VoidCrewShipCustomizer
 
         private static void DecorateSlots(HullInfo hull, ShipLoadout loadout)
         {
-            if (_slots.Count != hull.Sockets.Count)
+            if (_slots.Count < hull.Sockets.Count)
             {
                 Log.WarnOnce("slot count " + hull.ShipGuid, string.Format("The terminal draws {0} hardpoint positions for the {1}, but the ship has {2}; only the ones it draws can be changed.",
                     _slots.Count, hull.Name, hull.Sockets.Count));
@@ -381,9 +381,14 @@ namespace VoidCrewShipCustomizer
 
         // ---------------------------------------------------------------- toolbar
 
+        /// <summary>
+        /// The CUSTOM buttons sit in the empty space above the SELECT button, two to a row. They are added last to the
+        /// terminal's right-hand panel, so they are drawn (and clicked) on top of the ship picture and the panels.
+        /// </summary>
         private static void UpdateToolbar()
         {
-            if (_shownHull == null || _anchor == null)
+            VisualElement host = _anchor != null ? _anchor.parent : null;
+            if (_shownHull == null || host == null)
             {
                 if (_toolbar != null) _toolbar.RemoveFromHierarchy();
                 return;
@@ -392,11 +397,12 @@ namespace VoidCrewShipCustomizer
             {
                 _toolbar = new VisualElement { name = "ShipCustomizerToolbar" };
                 _toolbar.style.position = Position.Absolute;
-                _toolbar.style.left = 0;
-                _toolbar.style.top = 0;
+                _toolbar.style.right = ToolbarRight;
+                _toolbar.style.bottom = ToolbarBottom;
+                _toolbar.style.width = ToolbarWidth;
                 _toolbar.style.flexDirection = FlexDirection.Row;
                 _toolbar.style.flexWrap = Wrap.Wrap;
-                _toolbar.style.alignItems = Align.Center;
+                _toolbar.style.justifyContent = Justify.SpaceBetween;
             }
             _toolbar.Clear();
             HullInfo hull = _shownHull;
@@ -405,23 +411,93 @@ namespace VoidCrewShipCustomizer
             if (!editable)
             {
                 Label viewOnly = Ui.Label("HOST'S CUSTOM LOADOUT (VIEW ONLY)", 17, Ui.Gold, true);
-                viewOnly.style.marginRight = 8;
+                viewOnly.style.width = new Length(100, LengthUnit.Percent);
+                viewOnly.style.marginBottom = 6;
                 _toolbar.Add(viewOnly);
             }
-            _toolbar.Add(Ui.Button("STORAGE (" + config.StoredCount + ")", () => OpenStorage(hull), 17));
+            AddToolbarButton("HARDPOINTS", () => OpenHardpointList(hull));
+            AddToolbarButton("STORAGE (" + config.StoredCount + ")", () => OpenStorage(hull));
             if (editable)
             {
-                _toolbar.Add(Ui.Button("HOMUNCULUS", () => OpenHomunculusPicker(hull), 17));
-                _toolbar.Add(Ui.Button("COPY A LOADOUT", () => OpenCopyPicker(hull, false), 17));
-                _toolbar.Add(Ui.Button("EMPTY", () => OpenEmptyPicker(hull), 17));
+                AddToolbarButton("HOMUNCULUS", () => OpenHomunculusPicker(hull));
+                AddToolbarButton("COPY A LOADOUT", () => OpenCopyPicker(hull, false));
+                AddToolbarButton("EMPTY", () => OpenEmptyPicker(hull));
             }
-            if (_toolbar.parent != _anchor)
+            if (_toolbar.parent != host)
             {
                 _toolbar.RemoveFromHierarchy();
-                _anchor.Add(_toolbar);
+                host.Add(_toolbar);
             }
             _toolbar.BringToFront();
             foreach (VisualElement child in _toolbar.Children()) Ui.Announce(child);
+        }
+
+        private const float ToolbarRight = 29f;
+        private const float ToolbarBottom = 122f;
+        private const float ToolbarWidth = 362f;
+
+        private static void AddToolbarButton(string text, Action onClick)
+        {
+            VisualElement button = Ui.Button(text, onClick, 17);
+            button.style.width = (ToolbarWidth - 6f) / 2f;
+            button.style.height = 40;
+            button.style.marginRight = 0;
+            button.style.marginBottom = 6;
+            button.style.backgroundColor = new Color(0.08f, 0.085f, 0.09f, 0.92f);
+            _toolbar.Add(button);
+        }
+
+        /// <summary>
+        /// Every hardpoint as a big row, with what is fitted there: the same choices as clicking the ship picture,
+        /// without having to hit a small icon (hard with a head-aimed pointer in VR).
+        /// </summary>
+        private static void OpenHardpointList(HullInfo hull)
+        {
+            HullConfig config = CustomLoadouts.ConfigToShow(hull);
+            int drawn = _slots != null ? Math.Min(_slots.Count, hull.Sockets.Count) : hull.Sockets.Count;
+            var fitted = new HashSet<int>(config.Slots.Keys.Where(k => k >= 0 && k < drawn));
+            HashSet<int> offered = Hardpoints.OfferedEmpty(hull.Sockets, fitted, drawn);
+            bool editable = CustomLoadouts.CanEdit(hull);
+
+            var entries = new List<PickerPanel.Entry>();
+            foreach (SocketInfo socket in hull.Sockets.Where(s => fitted.Contains(s.Index) || offered.Contains(s.Index))
+                         .OrderBy(s => s.Group).ThenByDescending(s => (int)s.Size).ThenBy(s => s.Index))
+            {
+                Option option = null;
+                string code;
+                if (config.Slots.TryGetValue(socket.Index, out code)) Catalog.TryGetOption(code, out option);
+                string rarity = option != null ? Ui.RarityName(option.Rarity) : "";
+                SocketInfo chosen = socket;
+                entries.Add(new PickerPanel.Entry
+                {
+                    Name = option != null ? option.Name : "EMPTY",
+                    Detail = PositionName(hull, socket) + "  ·  " + Catalog.SizeName(socket.Size) + (rarity.Length > 0 ? "  ·  " + rarity : ""),
+                    Icon = option != null ? option.Icon : null,
+                    Accent = option != null ? Ui.RarityColor(option.Rarity) : Ui.TextDim,
+                    Tag = option == null ? "+ FIT" : (editable ? "CHANGE" : ""),
+                    Tooltip = option != null ? option.Context : null,
+                    TooltipGuid = option != null ? option.Guid : GUIDUnion.Empty(),
+                    OnPick = () => OnSlotClicked(chosen.Index)
+                });
+            }
+            OpenPicker("HARDPOINTS · " + hull.Name.ToUpperInvariant(),
+                editable ? "Pick a hardpoint to change what is fitted there. Port is the ship's left, starboard its right." : "The host's CUSTOM loadout; only the host can change it.",
+                entries, null);
+        }
+
+        /// <summary>Where a hardpoint is on the ship, from its position in the ship prefab (x is starboard, z is forward).</summary>
+        private static string PositionName(HullInfo hull, SocketInfo socket)
+        {
+            if (socket.Cells.Length == 0) return "HARDPOINT " + (socket.Group + 1);
+            Vector3 centre = Vector3.zero;
+            foreach (Vector3 cell in socket.Cells) centre += cell;
+            centre /= socket.Cells.Length;
+            float minZ = hull.Sockets.SelectMany(s => s.Cells).Min(c => c.z);
+            float maxZ = hull.Sockets.SelectMany(s => s.Cells).Max(c => c.z);
+            float along = maxZ - minZ > 0.1f ? (centre.z - minZ) / (maxZ - minZ) : 0.5f;
+            string side = centre.x < -1f ? "PORT" : (centre.x > 1f ? "STARBOARD" : "CENTRE");
+            string length = along > 0.8f ? "BOW" : (along > 0.55f ? "FORWARD" : (along > 0.3f ? "MIDSHIPS" : "AFT"));
+            return side + ", " + length;
         }
 
         private static void OpenHomunculusPicker(HullInfo hull)
@@ -464,11 +540,12 @@ namespace VoidCrewShipCustomizer
             foreach (ShipLoadoutDataDef preset in hull.Presets)
             {
                 ShipLoadoutDataDef def = preset;
+                bool listed = hull.RegularPresets.Contains(preset);
                 string detail;
                 try
                 {
                     ShipLoadout loadout = preset.Asset.ShipLoadout;
-                    detail = loadout.Sockets.Count + " modules  ·  " + loadout.GetAllResourceInfos(true).Count + " stored items";
+                    detail = loadout.Sockets.Count(e => e != null && e.Module != null && !e.Module.IsNull) + " modules  ·  " + loadout.GetAllResourceInfos(true).Count + " stored items";
                 }
                 catch
                 {
@@ -478,6 +555,7 @@ namespace VoidCrewShipCustomizer
                 {
                     Name = LoadoutStore.PresetName(preset).ToUpperInvariant(),
                     Detail = detail,
+                    Category = listed ? "TERMINAL LOADOUTS" : "CHALLENGE AND OTHER",
                     OnPick = () => Edit(hull, c =>
                     {
                         HullConfig copy = LoadoutStore.FromGameLoadout(hull, def);

@@ -137,7 +137,7 @@ namespace VoidCrewShipCustomizer
             ShipLoadoutContextInfo context = UnityEngine.Object.Instantiate(hull.BasePreset.LoadoutContextInfo);
             context.name = "ShipCustomizer CUSTOM " + hull.Name;
             context.hideFlags = HideFlags.DontUnloadUnusedAsset;
-            string body = "<b>Custom Loadout</b>\n<i>Click a hardpoint on the ship to fit any module or weapon.</i>\n" +
+            string body = "<b>Custom Loadout</b>\n<i>Click a hardpoint on the ship, or use HARDPOINTS, to fit any module or weapon.</i>\n" +
                           "Missions flown with it are marked modded and earn no XP or rewards.";
             if (HeaderTextField != null) HeaderTextField.SetValue(context, new DefaultableLocalizedString(Header, null));
             if (BodyTextField != null) BodyTextField.SetValue(context, new DefaultableLocalizedString(body, null));
