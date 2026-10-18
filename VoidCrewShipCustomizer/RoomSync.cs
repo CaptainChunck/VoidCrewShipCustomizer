@@ -1,14 +1,20 @@
 using System;
+using System.Collections.Generic;
+using CG.Profile;
 using ExitGames.Client.Photon;
+using Gameplay.Hub;
 using Newtonsoft.Json;
 using Photon.Pun;
 using ResourceAssets;
+using UnityEngine;
 
 namespace VoidCrewShipCustomizer
 {
     /// <summary>
-    /// Tells other players with the mod about the host's CUSTOM loadout through two Photon room properties. Players
-    /// without the mod ignore them. The host writes; everyone else reads them a few times a second.
+    /// Everything the plugin shares through Photon:
+    /// - room properties telling other players with the mod about the host's CUSTOM loadout and CUSTOM missions;
+    /// - a player property saying "I have the Ship Customizer", which the host checks before using CUSTOM.
+    /// Players without the mod ignore all of it. The host writes the room properties; everyone else reads them.
     /// </summary>
     internal static class RoomSync
     {
@@ -18,14 +24,32 @@ namespace VoidCrewShipCustomizer
         /// <summary>True while the current mission was started with a CUSTOM loadout.</summary>
         public const string RunKey = "SC_Run";
 
+        /// <summary>True while the room is closed to new players because a CUSTOM mission is running.</summary>
+        public const string ClosedKey = "SC_Closed";
+
+        /// <summary>Player property: this player runs the Ship Customizer (the value is <see cref="Protocol"/>).</summary>
+        public const string PlayerKey = "SC_Player";
+
+        /// <summary>Raised when what players exchange changes in a way older versions don't understand.</summary>
+        public const int Protocol = 1;
+
+        /// <summary>
+        /// How long a player who just joined may take to load into the hub before the host counts them as not having
+        /// the mod (their "I have it" property is only sent once they are in the hub).
+        /// </summary>
+        private const float JoinGraceSeconds = 45f;
+
         private sealed class RoomCustom
         {
             public string Ship;
             public HullConfig Config;
         }
 
+        private static readonly Dictionary<int, float> FirstSeen = new Dictionary<int, float>();
         private static string _room;
         private static string _lastCustomJson;
+        private static string _taggedRoom;
+        private static float _taggedAt;
 
         public static void PublishCustom(HullInfo hull, HullConfig config)
         {
@@ -62,7 +86,85 @@ namespace VoidCrewShipCustomizer
                    PhotonNetwork.CurrentRoom.CustomProperties.TryGetValue(key, out value);
         }
 
-        /// <summary>Called a few times a second.</summary>
+        // ---------------------------------------------------------------- who has the mod
+
+        /// <summary>
+        /// The other players in the room without this mod (or with an older one). With <paramref name="giveJoinersTime"/>,
+        /// players who joined in the last <see cref="JoinGraceSeconds"/> seconds are not counted yet.
+        /// </summary>
+        public static List<string> PlayersWithoutMod(bool giveJoinersTime)
+        {
+            var missing = new List<string>();
+            if (!PhotonNetwork.InRoom) return missing;
+            foreach (Photon.Realtime.Player player in PhotonNetwork.PlayerList)
+            {
+                if (player == null || player.IsLocal) continue;
+                object value;
+                if (player.CustomProperties != null && player.CustomProperties.TryGetValue(PlayerKey, out value) && value is int && (int)value >= Protocol) continue;
+                float seen;
+                if (giveJoinersTime && FirstSeen.TryGetValue(player.ActorNumber, out seen) && Time.unscaledTime - seen < JoinGraceSeconds) continue;
+                missing.Add(string.IsNullOrEmpty(player.NickName) ? "player " + player.ActorNumber : player.NickName);
+            }
+            return missing;
+        }
+
+        private static void TrackPlayers()
+        {
+            var present = new HashSet<int>();
+            foreach (Photon.Realtime.Player player in PhotonNetwork.PlayerList)
+            {
+                if (player == null) continue;
+                present.Add(player.ActorNumber);
+                if (!FirstSeen.ContainsKey(player.ActorNumber)) FirstSeen[player.ActorNumber] = Time.unscaledTime;
+            }
+            var gone = new List<int>();
+            foreach (int actor in FirstSeen.Keys)
+            {
+                if (!present.Contains(actor)) gone.Add(actor);
+            }
+            foreach (int actor in gone) FirstSeen.Remove(actor);
+        }
+
+        /// <summary>Tells the room this player has the mod (again after a few seconds if it didn't stick).</summary>
+        private static void TagLocalPlayer(string room)
+        {
+            Photon.Realtime.Player me = PhotonNetwork.LocalPlayer;
+            if (me == null) return;
+            object value;
+            bool tagged = me.CustomProperties != null && me.CustomProperties.TryGetValue(PlayerKey, out value) && value is int && (int)value == Protocol;
+            if (tagged || (_taggedRoom == room && Time.unscaledTime - _taggedAt < 5f)) return;
+            _taggedRoom = room;
+            _taggedAt = Time.unscaledTime;
+            me.SetCustomProperties(new Hashtable { { PlayerKey, Protocol } });
+        }
+
+        // ---------------------------------------------------------------- closing the room during CUSTOM missions
+
+        /// <summary>
+        /// Host: nobody can join a CUSTOM mission, because a player without the mod would earn progression in it.
+        /// The game itself never closes rooms, so the room is simply opened again back in the hub.
+        /// </summary>
+        public static void CloseForCustomMission()
+        {
+            if (!PhotonNetwork.InRoom || !PhotonNetwork.IsMasterClient || PhotonNetwork.CurrentRoom == null) return;
+            PhotonNetwork.CurrentRoom.IsOpen = false;
+            Set(ClosedKey, true);
+            Log.Info("The room is closed to new players until the CUSTOM mission is over.");
+        }
+
+        /// <summary>Host, back in the hub: open the room again if a CUSTOM mission closed it.</summary>
+        public static void ReopenAfterCustomMission()
+        {
+            object closed;
+            if (!PhotonNetwork.IsMasterClient || !TryGet(ClosedKey, out closed) || !(closed is bool) || !(bool)closed) return;
+            PhotonNetwork.CurrentRoom.IsOpen = true;
+            Set(ClosedKey, null);
+            Log.Info("The CUSTOM mission is over; the room is open to new players again.");
+        }
+
+        // ---------------------------------------------------------------- polling
+
+        /// <summary>Called a few times a second once the hub has loaded.</summary>
         public static void Poll()
         {
             string room = PhotonNetwork.InRoom && PhotonNetwork.CurrentRoom != null ? PhotonNetwork.CurrentRoom.Name : null;
@@ -70,11 +172,21 @@ namespace VoidCrewShipCustomizer
             {
                 _room = room;
                 _lastCustomJson = null;
+                FirstSeen.Clear();
                 CustomLoadouts.OnRoomChanged();
             }
-            if (room == null || PhotonNetwork.IsMasterClient) return;
-            // Only the hub shows loadouts; a change seen during a mission is picked up on the way back.
+            if (room == null) return;
+
+            TrackPlayers();
+            // Only once in the hub: the host checks for the tag as soon as players are able to send it.
             if (HubShipManager.Instance == null) return;
+            TagLocalPlayer(room);
+
+            if (PhotonNetwork.IsMasterClient)
+            {
+                EnforceEveryoneHasMod();
+                return;
+            }
 
             object value;
             TryGet(CustomKey, out value);
@@ -82,6 +194,52 @@ namespace VoidCrewShipCustomizer
             if (json == _lastCustomJson) return;
             _lastCustomJson = json;
             ApplyHostCustom(json);
+        }
+
+        /// <summary>
+        /// Host, in the hub: CUSTOM and saved CUSTOM runs are only allowed while everyone in the room has the mod. If
+        /// someone without it joins, the room goes back to the stand-in loadout (no one is kicked).
+        /// </summary>
+        private static void EnforceEveryoneHasMod()
+        {
+            if (!CustomLoadouts.IsActive && !SavedCustomRunSelected()) return;
+            List<string> missing = PlayersWithoutMod(true);
+            if (missing.Count == 0) return;
+            string who = string.Join(", ", missing.ToArray());
+
+            if (CustomLoadouts.IsActive)
+            {
+                HullInfo hull;
+                if (Catalog.TryGetHull(CustomLoadouts.ActiveShip, out hull) && HubShipManager.Instance != null)
+                {
+                    HubShipManager.Instance.SelectShip(hull.BasePreset.AssetGuid.AsIntArray());
+                }
+                else
+                {
+                    CustomLoadouts.DeactivateAsHost();
+                }
+                TerminalUi.Toast("CUSTOM was switched off: " + who + " joined without Ship Customizer. Everyone needs it for CUSTOM.");
+            }
+            if (SavedCustomRunSelected() && HubQuestManager.Instance != null)
+            {
+                HubQuestManager.Instance.SelectQuest(GUIDUnion.Empty());
+                TerminalUi.Toast("The saved CUSTOM run was unselected: " + who + " joined without Ship Customizer.");
+            }
+        }
+
+        /// <summary>Whether the room is set to continue a saved run that was started with a CUSTOM loadout.</summary>
+        public static bool SavedCustomRunSelected()
+        {
+            try
+            {
+                if (HubQuestManager.Instance == null || HubQuestManager.Instance.QuestStartType != HubQuestManager.SessionStartType.Preserved) return false;
+                PreservedGameSession saved = PlayerProfile.Instance.PreservedSession.PreservedSession;
+                return saved != null && LoadoutStore.WasCustomRun(saved.GameSessionID);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static void ApplyHostCustom(string json)

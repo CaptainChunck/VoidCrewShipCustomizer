@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using CG.Profile;
 using HarmonyLib;
 using Photon.Pun;
 using ResourceAssets;
@@ -45,6 +46,7 @@ namespace VoidCrewShipCustomizer
             else Log.Warn("Could not find HubShipManager's selection fields; the terminal will show the stand-in loadout as chosen instead of CUSTOM.");
 
             Patch("HubShipManager", "Start", null, nameof(HubStartPostfix));
+            Patch("Gameplay.Hub.HubQuestManager", "SelectPreservedSessionQuest", nameof(SelectSavedRunPrefix), null);
             Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnDestroy", nameof(TerminalDestroyPrefix), null);
             Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnLeaveUI", null, nameof(TerminalLeavePostfix));
 
@@ -102,6 +104,20 @@ namespace VoidCrewShipCustomizer
                     if (!PhotonNetwork.IsMasterClient)
                     {
                         TerminalUi.Toast("Only the host can choose the CUSTOM loadout.");
+                        return false;
+                    }
+                    // Modding guidelines: nobody may earn progression in a sandbox run, so everyone needs the mod (which
+                    // pauses their progression), and the room must be marked [mod_session] first.
+                    List<string> missing = RoomSync.PlayersWithoutMod(false);
+                    if (missing.Count > 0)
+                    {
+                        Notice.Show("Everyone in the room needs Ship Customizer for CUSTOM. Not yet: " + string.Join(", ", missing.ToArray()) +
+                                    ". (Just joined? Try again in a few seconds.)");
+                        return false;
+                    }
+                    if (!CustomLoadouts.EnsureRoomMarkedModded())
+                    {
+                        TerminalUi.Toast("Marking the room [mod_session] first; choose CUSTOM again in a moment.");
                         return false;
                     }
                     CustomLoadouts.ActivateAsHost(hull);
@@ -171,12 +187,33 @@ namespace VoidCrewShipCustomizer
             }
         }
 
+        /// <summary>A saved CUSTOM run can only be continued while everyone in the room has the mod.</summary>
+        private static bool SelectSavedRunPrefix()
+        {
+            try
+            {
+                if (!PhotonNetwork.IsMasterClient) return true;
+                PreservedGameSession saved = PlayerProfile.Instance.PreservedSession.PreservedSession;
+                if (saved == null || !LoadoutStore.WasCustomRun(saved.GameSessionID)) return true;
+                List<string> missing = RoomSync.PlayersWithoutMod(false);
+                if (missing.Count == 0) return true;
+                Notice.Show("Your saved run was started with CUSTOM, so everyone needs Ship Customizer to continue it. Not yet: " + string.Join(", ", missing.ToArray()) + ".");
+                return false;
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Checking the saved run", e);
+                return true;
+            }
+        }
+
         private static void HubStartPostfix(HubShipManager __instance)
         {
             try
             {
                 CustomizerRuntime.GameReady = true;
                 ProgressionGuard.OnHubLoaded();
+                RoomSync.ReopenAfterCustomMission();
                 CustomLoadouts.OnHubLoaded(__instance);
             }
             catch (Exception e)

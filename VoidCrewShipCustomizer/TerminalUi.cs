@@ -770,10 +770,16 @@ namespace VoidCrewShipCustomizer
             return host;
         }
 
-        /// <summary>A short message across the top of the terminal screen.</summary>
+        /// <summary>A short message across the top of the terminal screen, also written to the log.</summary>
         public static void Toast(string message)
         {
             Log.Info(message);
+            ShowToast(message);
+        }
+
+        /// <summary>The message on the terminal screen only (when the terminal is there).</summary>
+        public static void ShowToast(string message)
+        {
             VisualElement host = OverlayHost();
             if (host == null) return;
             if (_toast == null)

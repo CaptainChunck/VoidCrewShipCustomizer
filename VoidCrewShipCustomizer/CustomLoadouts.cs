@@ -367,16 +367,50 @@ namespace VoidCrewShipCustomizer
                 HullInfo hull;
                 if (Catalog.TryGetHull(ActiveShip, out hull) && hull.BasePreset != null && session.ToLoadShipGuid == hull.BasePreset.AssetGuid)
                 {
-                    HullConfig config = LoadoutStore.Get(hull);
-                    session.ToLoadShipData = Build(hull, config);
-                    custom = true;
-                    Log.Info("Starting the mission with your CUSTOM " + hull.Name + ": " + Describe(config) + ".");
+                    List<string> missing = RoomSync.PlayersWithoutMod(false);
+                    if (missing.Count > 0)
+                    {
+                        Notice.Show("This mission starts with " + LoadoutStore.PresetName(hull.BasePreset) + " instead of CUSTOM: " + string.Join(", ", missing.ToArray()) +
+                                    " doesn't have Ship Customizer, and nobody may earn progression in a CUSTOM run.");
+                    }
+                    else if (!EnsureRoomMarkedModded())
+                    {
+                        Notice.Show("This mission starts with " + LoadoutStore.PresetName(hull.BasePreset) + " instead of CUSTOM: the room is not marked [mod_session] yet.");
+                    }
+                    else
+                    {
+                        HullConfig config = LoadoutStore.Get(hull);
+                        session.ToLoadShipData = Build(hull, config);
+                        custom = true;
+                        Log.Info("Starting the mission with your CUSTOM " + hull.Name + ": " + Describe(config) + ".");
+                    }
                 }
+            }
+
+            if (custom && preserved != null)
+            {
+                List<string> missing = RoomSync.PlayersWithoutMod(false);
+                if (missing.Count > 0) Log.Warn("Continuing a saved CUSTOM run while " + string.Join(", ", missing.ToArray()) + " doesn't have Ship Customizer; their progression can't be paused.");
             }
 
             ResumeShip = custom && preserved == null ? ActiveShip : GUIDUnion.Empty();
             ProgressionGuard.SetHostRun(custom);
-            if (custom) ModdingUtils.RegisterSessionMod();
+            if (custom)
+            {
+                ModdingUtils.RegisterSessionMod();
+                RoomSync.CloseForCustomMission();
+            }
+        }
+
+        /// <summary>
+        /// The modding guidelines: a [mod_session] mod may only change the session while the room is marked
+        /// [mod_session]. The plugin marks rooms at start-up; this re-checks (and marks) just before it is needed.
+        /// </summary>
+        public static bool EnsureRoomMarkedModded()
+        {
+            if (ModdingUtils.IsCurrentSessionModded()) return true;
+            ModdingUtils.RegisterSessionMod();
+            return ModdingUtils.IsCurrentSessionModded();
         }
 
         /// <summary>Back in the hub after a CUSTOM mission: choose that CUSTOM loadout again, as the game does for its own.</summary>

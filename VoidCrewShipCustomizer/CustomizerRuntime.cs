@@ -15,6 +15,24 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         public static bool GameReady;
 
+        /// <summary>
+        /// The modding guidelines: a mod that changes the session marks itself [mod_session] before any room it hosts is
+        /// listed. The game then tags every room this player hosts as [mod_session] (players opt in to join those).
+        /// </summary>
+        private void Start()
+        {
+            if (!CustomLoadouts.Available) return;
+            try
+            {
+                ModdingUtils.RegisterSessionMod();
+                Log.Info("Rooms you host are marked [mod_session] (the game's tag for mods that change the session), as Void Crew's modding guidelines ask.");
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Marking hosted rooms as [mod_session]", e);
+            }
+        }
+
         private void Update()
         {
             if (!GameReady || Time.unscaledTime < _nextPoll) return;

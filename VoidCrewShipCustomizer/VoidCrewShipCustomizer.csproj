@@ -106,6 +106,7 @@
     <Compile Include="Hardpoints.cs" />
     <Compile Include="LoadoutStore.cs" />
     <Compile Include="Log.cs" />
+    <Compile Include="Notice.cs" />
     <Compile Include="Patches.cs" />
     <Compile Include="PickerPanel.cs" />
     <Compile Include="Plugin.cs" />

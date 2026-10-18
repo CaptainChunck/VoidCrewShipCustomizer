@@ -12,3 +12,6 @@ obj/
 *.dll
 *.pdb
 *.exe
+
+# Packaged uploads (tools/package.ps1)
+dist/
