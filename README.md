@@ -116,3 +116,8 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
 - Progression is paused by skipping `PlayerRewardsCollection.AddItem`, achievements and quest progress during CUSTOM
   runs. Every Harmony patch is looked up by name and applied on its own, so a game update turns CUSTOM off instead of
   breaking the game.
+
+## License
+
+This mod's source code is released under the [GNU General Public License v3.0](LICENSE). Void Crew, BepInEx and HarmonyX
+aren't part of this repository and keep their own licenses.
