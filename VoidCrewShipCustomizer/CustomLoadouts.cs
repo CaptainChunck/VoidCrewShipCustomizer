@@ -50,6 +50,18 @@ namespace VoidCrewShipCustomizer
         /// <summary>The ship whose CUSTOM loadout the last mission used, so it is chosen again back in the hub.</summary>
         public static GUIDUnion ResumeShip = GUIDUnion.Empty();
 
+        /// <summary>Which ship the loadout terminal is setting up: 1, or 2 while another plugin (Void Crew Fleet) says so.</summary>
+        public static int TerminalShip = 1;
+
+        /// <summary>The ship whose CUSTOM loadout the room's ship 2 uses (Void Crew Fleet), or empty.</summary>
+        public static GUIDUnion ActiveShip2 = GUIDUnion.Empty();
+
+        /// <summary>For players other than the host: the host's ship 2 CUSTOM loadout, read from the room.</summary>
+        public static HullConfig RemoteConfig2;
+
+        /// <summary>Host: this mission's ship 2 started with a CUSTOM loadout.</summary>
+        private static bool _ship2CustomRun;
+
         public static bool IsActive
         {
             get { return !ActiveShip.IsNull; }
@@ -67,6 +79,26 @@ namespace VoidCrewShipCustomizer
             Entry entry;
             hull = ByGuid.TryGetValue(guid, out entry) ? entry.Hull : null;
             return hull != null;
+        }
+
+        /// <summary>
+        /// The CUSTOM definition behind any CUSTOM GUID, created if needed: a request from another player, or a GUID read
+        /// from the room, can arrive before this player has opened that ship's list.
+        /// </summary>
+        public static bool TryGetDefOfCustomGuid(GUIDUnion guid, out ShipLoadoutDataDef def)
+        {
+            def = null;
+            Entry entry;
+            if (ByGuid.TryGetValue(guid, out entry))
+            {
+                def = entry.Def;
+                return true;
+            }
+            if (!Available || guid.IsNull) return false;
+            // The XOR undoes itself. Checking the ship list first keeps a random GUID from reading as a broken ship.
+            GUIDUnion ship = CustomGuidFor(guid);
+            if (!Catalog.ShipGuids().Contains(ship)) return false;
+            return TryGetDef(ship, out def) && def.AssetGuid == guid;
         }
 
         public static bool TryGetHull(ShipLoadoutDataDef customDef, out HullInfo hull)
@@ -144,17 +176,36 @@ namespace VoidCrewShipCustomizer
             return context;
         }
 
-        /// <summary>The loadout to show for a ship: the host's while the host has chosen it, otherwise the player's own.</summary>
+        /// <summary>
+        /// The loadout to show for a ship, for the ship the terminal is setting up: the host's while the host has chosen
+        /// it, otherwise the player's own.
+        /// </summary>
         public static HullConfig ConfigToShow(HullInfo hull)
         {
-            if (!PhotonNetwork.IsMasterClient && RemoteConfig != null && ActiveShip == hull.ShipGuid) return RemoteConfig;
-            return LoadoutStore.Get(hull);
+            HullConfig remote = TerminalShip == 2 ? RemoteConfig2 : RemoteConfig;
+            if (!PhotonNetwork.IsMasterClient && remote != null && RoomUses(hull)) return remote;
+            return LoadoutStore.Get(hull, TerminalShip);
         }
 
         /// <summary>Whether this player may change what the terminal shows for this ship.</summary>
         public static bool CanEdit(HullInfo hull)
         {
-            return PhotonNetwork.IsMasterClient || RemoteConfig == null || ActiveShip != hull.ShipGuid;
+            return PhotonNetwork.IsMasterClient || (TerminalShip == 2 ? RemoteConfig2 : RemoteConfig) == null || !RoomUses(hull);
+        }
+
+        /// <summary>Whether the room uses this ship's CUSTOM loadout for the ship the terminal is setting up.</summary>
+        public static bool RoomUses(HullInfo hull)
+        {
+            return (TerminalShip == 2 ? ActiveShip2 : ActiveShip) == hull.ShipGuid;
+        }
+
+        /// <summary>Another plugin switched the ship the terminal sets up; every CUSTOM definition now shows that ship's layout.</summary>
+        public static void SetTerminalShip(int ship)
+        {
+            if (TerminalShip == ship) return;
+            TerminalShip = ship;
+            RefreshAll();
+            TerminalUi.OnTerminalShipChanged();
         }
 
         /// <summary>Rebuilds what the terminal shows for a ship after its loadout changed.</summary>
@@ -344,7 +395,67 @@ namespace VoidCrewShipCustomizer
         public static void OnEdited(HullInfo hull)
         {
             Refresh(hull);
-            if (PhotonNetwork.IsMasterClient && ActiveShip == hull.ShipGuid) RoomSync.PublishCustom(hull, LoadoutStore.Get(hull));
+            if (!PhotonNetwork.IsMasterClient) return;
+            // Both: ship 2's layout follows ship 1's until it has its own.
+            if (ActiveShip == hull.ShipGuid) RoomSync.PublishCustom(hull, LoadoutStore.Get(hull));
+            if (ActiveShip2 == hull.ShipGuid) RoomSync.PublishCustom2(hull, LoadoutStore.Get(hull, 2));
+        }
+
+        // ---------------------------------------------------------------- ship 2 (Void Crew Fleet)
+
+        /// <summary>Host: the room's ship 2 now uses this ship's CUSTOM loadout.</summary>
+        public static void ActivateShip2AsHost(HullInfo hull)
+        {
+            bool changed = ActiveShip2 != hull.ShipGuid;
+            ActiveShip2 = hull.ShipGuid;
+            RemoteConfig2 = null;
+            Refresh(hull);
+            RoomSync.PublishCustom2(hull, LoadoutStore.Get(hull, 2));
+            ModdingUtils.RegisterSessionMod();
+            if (changed) Log.Info("Ship 2's loadout is now your ship 2 CUSTOM " + hull.Name + " (" + Describe(LoadoutStore.Get(hull, 2)) + ").");
+        }
+
+        /// <summary>Host: the room's ship 2 uses a game loadout (or none).</summary>
+        public static void DeactivateShip2AsHost()
+        {
+            if (ActiveShip2.IsNull) return;
+            HullInfo hull;
+            string name = Catalog.TryGetHull(ActiveShip2, out hull) ? hull.Name : "ship";
+            ActiveShip2 = GUIDUnion.Empty();
+            RoomSync.ClearCustom2();
+            Log.Info("Ship 2's loadout is no longer the CUSTOM " + name + ".");
+        }
+
+        /// <summary>
+        /// Host, at mission start: ship 2's CUSTOM loadout built fresh, or null when CUSTOM can't be used (the host is told
+        /// why, and the caller uses the stand-in). The same rules as ship 1; a CUSTOM ship 2 makes the run a CUSTOM run.
+        /// </summary>
+        public static ShipLoadout BuildShip2ForMission(GUIDUnion guid)
+        {
+            ShipLoadoutDataDef def;
+            HullInfo hull;
+            if (!PhotonNetwork.IsMasterClient || !TryGetDefOfCustomGuid(guid, out def) || !TryGetHullOfCustomGuid(guid, out hull)) return null;
+            string instead = "Ship 2 starts with " + LoadoutStore.PresetName(hull.BasePreset) + " instead of CUSTOM: ";
+            List<string> missing = RoomSync.PlayersWithoutMod(false);
+            if (missing.Count > 0)
+            {
+                Notice.Show(instead + string.Join(", ", missing.ToArray()) + " doesn't have Ship Customizer, and nobody may earn progression in a CUSTOM run.");
+                return null;
+            }
+            if (!EnsureRoomMarkedModded())
+            {
+                Notice.Show(instead + "the room is not marked [mod_session] yet.");
+                return null;
+            }
+            HullConfig config = LoadoutStore.Get(hull, 2);
+            ShipLoadout loadout = Build(hull, config);
+            _ship2CustomRun = true;
+            // Only ever raises the pause; ship 1's check at mission start keeps it raised (see OnMissionStarting).
+            ProgressionGuard.SetHostRun(true);
+            ModdingUtils.RegisterSessionMod();
+            RoomSync.CloseForCustomMission();
+            Log.Info("Ship 2 starts with your ship 2 CUSTOM " + hull.Name + ": " + Describe(config) + ".");
+            return loadout;
         }
 
         /// <summary>
@@ -393,7 +504,10 @@ namespace VoidCrewShipCustomizer
                 if (missing.Count > 0) Log.Warn("Continuing a saved CUSTOM run while " + string.Join(", ", missing.ToArray()) + " doesn't have Ship Customizer; their progression can't be paused.");
             }
 
-            ResumeShip = custom && preserved == null ? ActiveShip : GUIDUnion.Empty();
+            bool shipOneCustom = custom;
+            // Ship 2 (Void Crew Fleet) is CUSTOM too, whichever of the two mission-start hooks ran first.
+            if (_ship2CustomRun && preserved == null) custom = true;
+            ResumeShip = shipOneCustom && preserved == null ? ActiveShip : GUIDUnion.Empty();
             ProgressionGuard.SetHostRun(custom);
             if (custom)
             {
@@ -416,6 +530,7 @@ namespace VoidCrewShipCustomizer
         /// <summary>Back in the hub after a CUSTOM mission: choose that CUSTOM loadout again, as the game does for its own.</summary>
         public static void OnHubLoaded(HubShipManager manager)
         {
+            _ship2CustomRun = false;
             if (!PhotonNetwork.IsMasterClient || ResumeShip.IsNull || manager == null) return;
             GUIDUnion ship = ResumeShip;
             ResumeShip = GUIDUnion.Empty();
@@ -431,6 +546,10 @@ namespace VoidCrewShipCustomizer
             ActiveShip = GUIDUnion.Empty();
             RemoteConfig = null;
             ResumeShip = GUIDUnion.Empty();
+            ActiveShip2 = GUIDUnion.Empty();
+            RemoteConfig2 = null;
+            _ship2CustomRun = false;
+            TerminalShip = 1;
             RefreshAll();
         }
 

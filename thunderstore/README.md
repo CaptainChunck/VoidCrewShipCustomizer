@@ -35,6 +35,12 @@ Ship Customizer follows Void Crew's official modding guidelines for sandbox mods
   the CUSTOM mission is over. A saved CUSTOM run stays without progression when you continue it.
 - Other players with the mod see the host's CUSTOM loadout on their terminal.
 
+## Works with Void Crew Fleet
+
+With Void Crew Fleet installed, its second ship can use CUSTOM too. Under SHIP 2 the terminal shows ship 2's CUSTOM
+loadout: the same as ship 1's until you change it there. COPY A LOADOUT has SAME AS SHIP 1 to go back. The same rules
+apply to both ships.
+
 ## Settings
 
 `BepInEx\config\com.captainchunck.voidcrew.shipcustomizer.cfg`:

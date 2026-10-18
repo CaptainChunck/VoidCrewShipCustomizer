@@ -24,11 +24,12 @@ namespace VoidCrewShipCustomizer
         /// <summary>Host: the mission now starting does (or doesn't) use a CUSTOM loadout.</summary>
         public static void SetHostRun(bool customRun)
         {
+            bool raised = customRun && !_hostRun;
             _hostRun = customRun;
             _hostRunAnnounced = false;
             _rememberedRun = null;
             RoomSync.SetRun(customRun);
-            if (customRun) Log.Info("Progression is paused for this run because it uses a CUSTOM loadout (no XP, rewards, quest progress or achievements).");
+            if (raised) Log.Info("Progression is paused for this run because it uses a CUSTOM loadout (no XP, rewards, quest progress or achievements).");
         }
 
         /// <summary>Back in the hub: progression is on again.</summary>

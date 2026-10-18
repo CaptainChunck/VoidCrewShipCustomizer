@@ -32,6 +32,8 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
   - **HOMUNCULUS**: the standard homunculus, or any Blessed Homunculus from the game's loadouts.
   - **COPY A LOADOUT**: start from any of the game's loadouts, including the challenge ones, then change what you like.
   - **EMPTY**: clear the hardpoints, the racks, or everything.
+- **Works with [Void Crew Fleet](https://thunderstore.io/c/void-crew/)**: Fleet's second ship can use CUSTOM too, with
+  a layout of its own (the same as ship 1's until you change it under SHIP 2).
 - Your CUSTOM loadouts are saved per ship in
   `%USERPROFILE%\AppData\LocalLow\Hutlihut Games ApS\Void Crew\ShipCustomizer\custom-loadouts.json`.
 
@@ -118,6 +120,23 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
 - Progression is paused by skipping `PlayerRewardsCollection.AddItem`, achievements and quest progress during CUSTOM
   runs. Every Harmony patch is looked up by name and applied on its own, so a game update turns CUSTOM off instead of
   breaking the game.
+
+### Public API for other mods
+
+`VoidCrewShipCustomizer.ShipCustomizerApi` is meant to be reached through reflection (find the plugin with GUID
+`com.captainchunck.voidcrew.shipcustomizer` in `Chainloader.PluginInfos`), so neither mod needs the other. Check
+`ApiVersion` (currently `1`) first. No member throws. Void Crew Fleet uses it for its second ship.
+
+| Member | What it does |
+|---|---|
+| `const int ApiVersion` | Raised when a member changes in a way older callers don't understand. |
+| `ShipLoadoutDataDef GetDef(GUIDUnion)` | The CUSTOM definition behind a GUID (created on first use), or null if it isn't CUSTOM. |
+| `ShipLoadoutDataDef GetStandIn(GUIDUnion)` | The game loadout a CUSTOM loadout is built on and shown as to players without the mod. |
+| `void SetTerminalShip(int)` | 1 or 2: which ship's CUSTOM layout the loadout terminal shows, edits and saves. |
+| `string CheckShip2(GUIDUnion, int actorNumber)` | Host: null if that player may give ship 2 this CUSTOM loadout now, otherwise the reason. |
+| `void SetShip2(GUIDUnion)` | Host: ship 2 now uses this loadout (CUSTOM or not); other players with the mod see its layout. |
+| `ShipLoadout BuildShip2(GUIDUnion)` | Host, from a `GSIngame.TransitionTo` prefix that runs after this plugin's: ship 2's CUSTOM `ShipLoadout`, or null (use the stand-in). Makes the run a CUSTOM run. |
+| `event Action Ship2CustomCancelled` | Host: ship 2's CUSTOM was switched off in the hub because someone without the mod joined. |
 
 ## License
 

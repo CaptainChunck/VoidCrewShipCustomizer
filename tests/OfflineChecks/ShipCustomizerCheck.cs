@@ -10,7 +10,8 @@ using Mono.Cecil;
 //  1. every patch target, private field and injected parameter the plugin looks up BY NAME exists in the game's
 //     Assembly-CSharp.dll, with exactly one method of that name (AccessTools.Method would be ambiguous otherwise);
 //  2. the plugin's hardpoint rules give the expected answers on a made-up ship layout;
-//  3. a Custom loadout config survives a JSON round trip with the game's Newtonsoft.
+//  3. a Custom loadout config survives a JSON round trip with the game's Newtonsoft;
+//  4. the public API other plugins (Void Crew Fleet) call by reflection keeps its names and signatures.
 // Run it with tests\build-and-test.ps1, which builds the plugin first. When the plugin starts looking up another game
 // member by name (a Harmony patch target, a ___field injection, AccessTools.Field/Method), add a check for it below.
 // Usage: ShipCustomizerCheck.exe <plugin dir> <game Managed dir> <BepInEx core dir> [<desktop Newtonsoft.Json dir>]
@@ -26,6 +27,7 @@ internal static class Program
         try
         {
             StaticChecks(Path.Combine(args[1], "Assembly-CSharp.dll"));
+            ApiChecks(Path.Combine(args[0], "VoidCrewShipCustomizer.dll"));
             LogicChecks(Assembly.LoadFrom(Path.Combine(args[0], "VoidCrewShipCustomizer.dll")));
         }
         catch (Exception e)
@@ -141,6 +143,47 @@ internal static class Program
         Check(typeOk, typeName + "." + fieldName + " : " + field.FieldType.FullName + (typeOk ? "" : " (expected " + fieldType + ")"));
     }
 
+    // ------------------------------------------------------------------ 4. the public API (read from the DLL, not loaded)
+
+    private static void ApiChecks(string pluginPath)
+    {
+        Console.WriteLine("Public API for other plugins (Void Crew Fleet calls these by reflection):");
+        ModuleDefinition plugin = ModuleDefinition.ReadModule(pluginPath);
+        TypeDefinition api = plugin.GetType("VoidCrewShipCustomizer.ShipCustomizerApi");
+        if (api == null)
+        {
+            Check(false, "VoidCrewShipCustomizer.ShipCustomizerApi exists");
+            return;
+        }
+        Check(api.IsPublic && api.IsAbstract && api.IsSealed, "ShipCustomizerApi is a public static class");
+        FieldDefinition version = api.Fields.FirstOrDefault(f => f.Name == "ApiVersion");
+        Check(version != null && version.IsPublic && version.HasConstant && Equals(version.Constant, 1), "ApiVersion is a public const int = 1");
+        ApiMethod(api, "GetDef", "ResourceAssets.ShipLoadoutDataDef", "GUIDUnion");
+        ApiMethod(api, "GetStandIn", "ResourceAssets.ShipLoadoutDataDef", "GUIDUnion");
+        ApiMethod(api, "SetTerminalShip", "System.Void", "System.Int32");
+        ApiMethod(api, "CheckShip2", "System.String", "GUIDUnion", "System.Int32");
+        ApiMethod(api, "SetShip2", "System.Void", "GUIDUnion");
+        ApiMethod(api, "BuildShip2", "ShipLoadout", "GUIDUnion");
+        EventDefinition cancelled = api.Events.FirstOrDefault(e => e.Name == "Ship2CustomCancelled");
+        Check(cancelled != null && cancelled.EventType.FullName == "System.Action" && cancelled.AddMethod.IsPublic && cancelled.AddMethod.IsStatic,
+            "public static event System.Action Ship2CustomCancelled");
+    }
+
+    private static void ApiMethod(TypeDefinition api, string name, string returns, params string[] parameters)
+    {
+        string what = "public static " + returns + " " + name + "(" + string.Join(", ", parameters) + ")";
+        List<MethodDefinition> methods = api.Methods.Where(m => m.Name == name).ToList();
+        if (methods.Count != 1)
+        {
+            Check(false, what + ": expected exactly one method with that name, found " + methods.Count);
+            return;
+        }
+        MethodDefinition method = methods[0];
+        bool ok = method.IsPublic && method.IsStatic && method.ReturnType.FullName == returns &&
+                  method.Parameters.Select(p => p.ParameterType.FullName).SequenceEqual(parameters);
+        Check(ok, what + (ok ? "" : ": found " + method.FullName));
+    }
+
     // ------------------------------------------------------------------ 2 and 3. plugin logic
 
     private static Type _socketType;
@@ -214,6 +257,39 @@ internal static class Program
         Check(copiedStorage.Count == 1 && ((List<string>)copiedStorage[12])[2] == "c:0123456789abcdef0123456789abcdef" && ((List<string>)copiedStorage[12])[1] == "", "storage racks survive a save and load");
         Check((string)config.GetField("Homunculus").GetValue(copy) == "i:ffeeddccbbaa99887766554433221100", "homunculus survives a save and load");
         Check((int)config.GetProperty("StoredCount").GetValue(copy, null) == 2, "stored item count ignores empty slots");
+
+        // Ship 2's own layouts (Void Crew Fleet) are saved next to ship 1's; files from 0.3.0 have none.
+        Type json = System.Type.GetType("Newtonsoft.Json.JsonConvert, Newtonsoft.Json", true);
+        MethodInfo serialize = json.GetMethod("SerializeObject", new[] { typeof(object) });
+        MethodInfo deserialize = json.GetMethod("DeserializeObject", new[] { typeof(string), typeof(Type) });
+        Type store = plugin.GetType("VoidCrewShipCustomizer.LoadoutStore+StoreFile", true);
+        object file = Activator.CreateInstance(store, true);
+        ((IDictionary)store.GetField("Ships").GetValue(file))["4bc2ff9e1d156c94a9c94286a7aaa79b"] = original;
+        ((IDictionary)store.GetField("SecondShips").GetValue(file))["4bc2ff9e1d156c94a9c94286a7aaa79b"] = copy;
+        object reloaded = deserialize.Invoke(null, new object[] { (string)serialize.Invoke(null, new[] { file }), store });
+        var second = (IDictionary)store.GetField("SecondShips").GetValue(reloaded);
+        Check(second.Count == 1 && ((IDictionary)config.GetField("Slots").GetValue(second["4bc2ff9e1d156c94a9c94286a7aaa79b"])).Count == 2,
+            "ship 2's own layouts survive a save and load");
+        object old = deserialize.Invoke(null, new object[] { "{\"Version\":1,\"Ships\":{},\"CustomRuns\":[]}", store });
+        Check(store.GetField("SecondShips").GetValue(old) is IDictionary, "a 0.3.0 save file loads, with no ship 2 layouts");
+
+        // CUSTOM GUIDs: the same per ship for every player, and the XOR undoes itself (TryGetDefOfCustomGuid relies on it).
+        Console.WriteLine("CUSTOM loadout ids:");
+        Type guid = System.Type.GetType("GUIDUnion, ResourceAssets", true);
+        MethodInfo customGuidFor = plugin.GetType("VoidCrewShipCustomizer.CustomLoadouts", true).GetMethod("CustomGuidFor", BindingFlags.NonPublic | BindingFlags.Static);
+        var known = new[]
+        {
+            new[] { "METEM Frigate", "ac98ae5eb3b940747b0fbb7bd616b019", "991c3a5b87ec75318fdb2fde8233a20b" },
+            new[] { "METEM Striker", "d872500325a2d54498189cdfd4b788e7", "edf6c40611f7e0016ccc087a80929af5" },
+            new[] { "METEM Destroyer", "4bc2ff9e1d156c94a9c94286a7aaa79b", "7e466b9b294059d15d1dd623f38fb589" }
+        };
+        foreach (string[] ship in known)
+        {
+            object hull = Activator.CreateInstance(guid, ship[1]);
+            object custom = customGuidFor.Invoke(null, new[] { hull });
+            object back = customGuidFor.Invoke(null, new[] { custom });
+            Check(custom.ToString() == ship[2] && back.ToString() == ship[1], ship[0] + " CUSTOM id is " + ship[2] + " and maps back to the ship (got " + custom + ")");
+        }
     }
 
     private static void AddSocket(IList sockets, Type vector3, object right, object forward, string size, float x, float y, float z)

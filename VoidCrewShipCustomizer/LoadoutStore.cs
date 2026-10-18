@@ -49,6 +49,8 @@ namespace VoidCrewShipCustomizer
         {
             public int Version = 1;
             public Dictionary<string, HullConfig> Ships = new Dictionary<string, HullConfig>();
+            /// <summary>Ship 2's own CUSTOM loadouts (Void Crew Fleet), by ship. Files from 0.3.0 don't have it.</summary>
+            public Dictionary<string, HullConfig> SecondShips = new Dictionary<string, HullConfig>();
             public List<string> CustomRuns = new List<string>();
         }
 
@@ -93,31 +95,59 @@ namespace VoidCrewShipCustomizer
                 }
                 if (_file == null) _file = new StoreFile();
                 if (_file.Ships == null) _file.Ships = new Dictionary<string, HullConfig>();
+                if (_file.SecondShips == null) _file.SecondShips = new Dictionary<string, HullConfig>();
                 if (_file.CustomRuns == null) _file.CustomRuns = new List<string>();
                 return _file;
             }
         }
 
-        /// <summary>The player's Custom loadout for a ship; a copy of the ship's first loadout until they change it.</summary>
-        public static HullConfig Get(HullInfo hull)
+        /// <summary>
+        /// The player's CUSTOM loadout for a ship: ship 1's (a copy of the ship's first loadout until they change it), or
+        /// ship 2's own (Void Crew Fleet), which is ship 1's until it is changed under SHIP 2.
+        /// </summary>
+        public static HullConfig Get(HullInfo hull, int ship = 1)
         {
             HullConfig config;
-            if (File.Ships.TryGetValue(hull.ShipGuid.AsHex(), out config) && config != null)
-            {
-                if (config.Slots == null) config.Slots = new SortedDictionary<int, string>();
-                if (config.Storage == null) config.Storage = new SortedDictionary<int, List<string>>();
-                if (config.Homunculus == null) config.Homunculus = "";
-                return config;
-            }
+            if (ship == 2) return File.SecondShips.TryGetValue(hull.ShipGuid.AsHex(), out config) && config != null ? Normalize(config) : Get(hull);
+            if (File.Ships.TryGetValue(hull.ShipGuid.AsHex(), out config) && config != null) return Normalize(config);
             config = FromGameLoadout(hull, hull.BasePreset);
             File.Ships[hull.ShipGuid.AsHex()] = config;
             return config;
         }
 
-        public static void Set(HullInfo hull, HullConfig config)
+        /// <summary>The loadout to change: ship 2 gets its own copy of ship 1's the first time it is changed.</summary>
+        public static HullConfig GetForEdit(HullInfo hull, int ship)
         {
-            File.Ships[hull.ShipGuid.AsHex()] = config;
+            HullConfig own;
+            if (ship != 2) return Get(hull);
+            return File.SecondShips.TryGetValue(hull.ShipGuid.AsHex(), out own) && own != null ? Normalize(own) : Get(hull).Clone();
+        }
+
+        public static void Set(HullInfo hull, HullConfig config, int ship = 1)
+        {
+            (ship == 2 ? File.SecondShips : File.Ships)[hull.ShipGuid.AsHex()] = config;
             Save();
+        }
+
+        /// <summary>Ship 2 follows ship 1's loadout again.</summary>
+        public static void ForgetShip2(HullInfo hull)
+        {
+            if (File.SecondShips.Remove(hull.ShipGuid.AsHex())) Save();
+        }
+
+        /// <summary>Whether ship 2 has its own loadout for this ship (rather than following ship 1's).</summary>
+        public static bool HasOwnShip2(HullInfo hull)
+        {
+            HullConfig own;
+            return File.SecondShips.TryGetValue(hull.ShipGuid.AsHex(), out own) && own != null;
+        }
+
+        private static HullConfig Normalize(HullConfig config)
+        {
+            if (config.Slots == null) config.Slots = new SortedDictionary<int, string>();
+            if (config.Storage == null) config.Storage = new SortedDictionary<int, List<string>>();
+            if (config.Homunculus == null) config.Homunculus = "";
+            return config;
         }
 
         public static void Save()

@@ -83,7 +83,7 @@ namespace VoidCrewShipCustomizer
                 _shown = data;
                 _shownHull = hull;
                 DecorateSlots(hull, loadout);
-                bool roomUsesIt = CustomLoadouts.ActiveShip == hull.ShipGuid;
+                bool roomUsesIt = CustomLoadouts.RoomUses(hull);
                 LockSelect(!PhotonNetwork.IsMasterClient, roomUsesIt ? null : "HOST ONLY", !roomUsesIt);
             }
             else
@@ -108,6 +108,19 @@ namespace VoidCrewShipCustomizer
             _toolbar = null;
             _toast = null;
             Hooks.Clear();
+            if (CustomLoadouts.TerminalShip != 1)
+            {
+                CustomLoadouts.TerminalShip = 1;
+                CustomLoadouts.RefreshAll();
+            }
+        }
+
+        /// <summary>Another plugin switched the ship the terminal sets up: close pop-ups made for the other ship and redraw.</summary>
+        public static void OnTerminalShipChanged()
+        {
+            CloseOverlays();
+            if (_shownHull != null) Redisplay();
+            else UpdateToolbar();
         }
 
         /// <summary>The player stepped away from the terminal.</summary>
@@ -408,6 +421,13 @@ namespace VoidCrewShipCustomizer
             HullInfo hull = _shownHull;
             HullConfig config = CustomLoadouts.ConfigToShow(hull);
             bool editable = CustomLoadouts.CanEdit(hull);
+            if (CustomLoadouts.TerminalShip == 2)
+            {
+                Label shipTwo = Ui.Label("SHIP 2'S CUSTOM LOADOUT", 17, Ui.Gold, true);
+                shipTwo.style.width = new Length(100, LengthUnit.Percent);
+                shipTwo.style.marginBottom = 6;
+                _toolbar.Add(shipTwo);
+            }
             if (!editable)
             {
                 Label viewOnly = Ui.Label("HOST'S CUSTOM LOADOUT (VIEW ONLY)", 17, Ui.Gold, true);
@@ -537,6 +557,34 @@ namespace VoidCrewShipCustomizer
         private static void OpenCopyPicker(HullInfo hull, bool storageOnly)
         {
             var entries = new List<PickerPanel.Entry>();
+            if (CustomLoadouts.TerminalShip == 2)
+            {
+                bool following = !LoadoutStore.HasOwnShip2(hull);
+                entries.Add(new PickerPanel.Entry
+                {
+                    Pinned = true,
+                    Name = "SAME AS SHIP 1",
+                    Detail = "Ship 2 uses ship 1's CUSTOM loadout and follows its changes.",
+                    Current = following,
+                    Tag = following ? "NOW" : "",
+                    OnPick = following ? (Action)(() => { }) : () => FollowShip1(hull)
+                });
+                entries.Add(new PickerPanel.Entry
+                {
+                    Pinned = true,
+                    Name = "SHIP 1'S CUSTOM",
+                    Detail = storageOnly ? "Copy ship 1's storage racks once." : "Copy ship 1's CUSTOM loadout once, then change what you like.",
+                    OnPick = () => Edit(hull, c =>
+                    {
+                        HullConfig shipOne = LoadoutStore.Get(hull).Clone();
+                        c.Storage = shipOne.Storage;
+                        if (storageOnly) return;
+                        c.Slots = shipOne.Slots;
+                        c.Homunculus = shipOne.Homunculus;
+                        c.CopiedFrom = "ship 1's CUSTOM";
+                    })
+                });
+            }
             foreach (ShipLoadoutDataDef preset in hull.Presets)
             {
                 ShipLoadoutDataDef def = preset;
@@ -698,9 +746,24 @@ namespace VoidCrewShipCustomizer
                 Toast("Only the host can change the CUSTOM loadout the room is using.");
                 return;
             }
-            HullConfig config = LoadoutStore.Get(hull);
+            int ship = CustomLoadouts.TerminalShip;
+            HullConfig config = LoadoutStore.GetForEdit(hull, ship);
             change(config);
-            LoadoutStore.Set(hull, config);
+            LoadoutStore.Set(hull, config, ship);
+            CustomLoadouts.OnEdited(hull);
+            Redisplay();
+            if (_storage != null && _storage.IsOpen) _storage.Refresh();
+        }
+
+        /// <summary>Ship 2 goes back to using ship 1's CUSTOM loadout.</summary>
+        private static void FollowShip1(HullInfo hull)
+        {
+            if (!CustomLoadouts.CanEdit(hull))
+            {
+                Toast("Only the host can change the CUSTOM loadout the room is using.");
+                return;
+            }
+            LoadoutStore.ForgetShip2(hull);
             CustomLoadouts.OnEdited(hull);
             Redisplay();
             if (_storage != null && _storage.IsOpen) _storage.Refresh();

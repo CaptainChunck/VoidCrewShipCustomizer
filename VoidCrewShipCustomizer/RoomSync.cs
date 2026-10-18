@@ -21,6 +21,9 @@ namespace VoidCrewShipCustomizer
         /// <summary>JSON of the host's chosen CUSTOM loadout, absent while a game loadout is chosen.</summary>
         public const string CustomKey = "SC_Custom";
 
+        /// <summary>JSON of the host's ship 2 CUSTOM loadout (Void Crew Fleet), absent otherwise.</summary>
+        public const string CustomKey2 = "SC_Custom2";
+
         /// <summary>True while the current mission was started with a CUSTOM loadout.</summary>
         public const string RunKey = "SC_Run";
 
@@ -48,6 +51,7 @@ namespace VoidCrewShipCustomizer
         private static readonly Dictionary<int, float> FirstSeen = new Dictionary<int, float>();
         private static string _room;
         private static string _lastCustomJson;
+        private static string _lastCustomJson2;
         private static string _taggedRoom;
         private static float _taggedAt;
 
@@ -59,6 +63,16 @@ namespace VoidCrewShipCustomizer
         public static void ClearCustom()
         {
             Set(CustomKey, null);
+        }
+
+        public static void PublishCustom2(HullInfo hull, HullConfig config)
+        {
+            Set(CustomKey2, JsonConvert.SerializeObject(new RoomCustom { Ship = hull.ShipGuid.AsHex(), Config = config }, Formatting.None));
+        }
+
+        public static void ClearCustom2()
+        {
+            Set(CustomKey2, null);
         }
 
         public static void SetRun(bool customRun)
@@ -147,9 +161,10 @@ namespace VoidCrewShipCustomizer
         public static void CloseForCustomMission()
         {
             if (!PhotonNetwork.InRoom || !PhotonNetwork.IsMasterClient || PhotonNetwork.CurrentRoom == null) return;
+            bool wasOpen = PhotonNetwork.CurrentRoom.IsOpen;
             PhotonNetwork.CurrentRoom.IsOpen = false;
             Set(ClosedKey, true);
-            Log.Info("The room is closed to new players until the CUSTOM mission is over.");
+            if (wasOpen) Log.Info("The room is closed to new players until the CUSTOM mission is over.");
         }
 
         /// <summary>Host, back in the hub: open the room again if a CUSTOM mission closed it.</summary>
@@ -172,6 +187,7 @@ namespace VoidCrewShipCustomizer
             {
                 _room = room;
                 _lastCustomJson = null;
+                _lastCustomJson2 = null;
                 FirstSeen.Clear();
                 CustomLoadouts.OnRoomChanged();
             }
@@ -191,9 +207,18 @@ namespace VoidCrewShipCustomizer
             object value;
             TryGet(CustomKey, out value);
             string json = value as string;
-            if (json == _lastCustomJson) return;
-            _lastCustomJson = json;
-            ApplyHostCustom(json);
+            if (json != _lastCustomJson)
+            {
+                _lastCustomJson = json;
+                ApplyHostCustom(json, 1);
+            }
+            TryGet(CustomKey2, out value);
+            json = value as string;
+            if (json != _lastCustomJson2)
+            {
+                _lastCustomJson2 = json;
+                ApplyHostCustom(json, 2);
+            }
         }
 
         /// <summary>
@@ -202,7 +227,7 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         private static void EnforceEveryoneHasMod()
         {
-            if (!CustomLoadouts.IsActive && !SavedCustomRunSelected()) return;
+            if (!CustomLoadouts.IsActive && CustomLoadouts.ActiveShip2.IsNull && !SavedCustomRunSelected()) return;
             List<string> missing = PlayersWithoutMod(true);
             if (missing.Count == 0) return;
             string who = string.Join(", ", missing.ToArray());
@@ -219,6 +244,12 @@ namespace VoidCrewShipCustomizer
                     CustomLoadouts.DeactivateAsHost();
                 }
                 TerminalUi.Toast("CUSTOM was switched off: " + who + " joined without Ship Customizer. Everyone needs it for CUSTOM.");
+            }
+            if (!CustomLoadouts.ActiveShip2.IsNull)
+            {
+                CustomLoadouts.DeactivateShip2AsHost();
+                ShipCustomizerApi.RaiseShip2CustomCancelled();
+                TerminalUi.Toast("Ship 2's CUSTOM was switched off: " + who + " joined without Ship Customizer.");
             }
             if (SavedCustomRunSelected() && HubQuestManager.Instance != null)
             {
@@ -242,23 +273,40 @@ namespace VoidCrewShipCustomizer
             }
         }
 
-        private static void ApplyHostCustom(string json)
+        private static void ApplyHostCustom(string json, int ship)
         {
-            CustomLoadouts.ActiveShip = GUIDUnion.Empty();
-            CustomLoadouts.RemoteConfig = null;
+            if (ship == 2)
+            {
+                CustomLoadouts.ActiveShip2 = GUIDUnion.Empty();
+                CustomLoadouts.RemoteConfig2 = null;
+            }
+            else
+            {
+                CustomLoadouts.ActiveShip = GUIDUnion.Empty();
+                CustomLoadouts.RemoteConfig = null;
+            }
             if (!string.IsNullOrEmpty(json))
             {
                 try
                 {
                     var custom = JsonConvert.DeserializeObject<RoomCustom>(json);
-                    var ship = new GUIDUnion(custom.Ship);
+                    var hullGuid = new GUIDUnion(custom.Ship);
                     HullInfo hull;
                     ShipLoadoutDataDef def;
-                    if (Catalog.TryGetHull(ship, out hull) && CustomLoadouts.TryGetDef(ship, out def))
+                    if (Catalog.TryGetHull(hullGuid, out hull) && CustomLoadouts.TryGetDef(hullGuid, out def))
                     {
-                        CustomLoadouts.ActiveShip = ship;
-                        CustomLoadouts.RemoteConfig = custom.Config ?? new HullConfig();
-                        Log.Info("The host chose a CUSTOM " + hull.Name + ": " + CustomLoadouts.Describe(CustomLoadouts.RemoteConfig) + ".");
+                        HullConfig config = custom.Config ?? new HullConfig();
+                        if (ship == 2)
+                        {
+                            CustomLoadouts.ActiveShip2 = hullGuid;
+                            CustomLoadouts.RemoteConfig2 = config;
+                        }
+                        else
+                        {
+                            CustomLoadouts.ActiveShip = hullGuid;
+                            CustomLoadouts.RemoteConfig = config;
+                        }
+                        Log.Info("The host chose a CUSTOM " + hull.Name + (ship == 2 ? " for ship 2" : "") + ": " + CustomLoadouts.Describe(config) + ".");
                     }
                 }
                 catch (Exception e)
