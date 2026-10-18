@@ -62,6 +62,46 @@ namespace VoidCrewShipCustomizer
             return button;
         }
 
+        /// <summary>
+        /// One of the game's own buttons: its style classes (for example metem-button-size__small, the small version of
+        /// SELECT) with its hover and click sounds, and clicks wired the way the game wires its buttons.
+        /// </summary>
+        public static Button GameButton(string text, Action onClick, params string[] classes)
+        {
+            var button = new Button { text = text };
+            foreach (string name in classes) button.AddToClassList(name);
+            button.AddToClassList("audio-hover__button");
+            button.AddToClassList("audio-click__button");
+            button.AddClickedEvent(() =>
+            {
+                try
+                {
+                    onClick();
+                }
+                catch (Exception e)
+                {
+                    Log.Failure("Handling a click in the Ship Customizer", e);
+                }
+            });
+            try
+            {
+                UIAudioProvider.AddSounds(button);
+            }
+            catch
+            {
+                // Sounds are a nicety.
+            }
+            return button;
+        }
+
+        /// <summary>A label in the game's own text style (its style classes, for example the panel headers').</summary>
+        public static Label GameLabel(string text, params string[] classes)
+        {
+            var label = new Label(text) { pickingMode = PickingMode.Ignore };
+            foreach (string name in classes) label.AddToClassList(name);
+            return label;
+        }
+
         /// <summary>Makes any element clickable with the left mouse button, the same way the game's lists are.</summary>
         public static Clickable Click(VisualElement element, Action onClick)
         {

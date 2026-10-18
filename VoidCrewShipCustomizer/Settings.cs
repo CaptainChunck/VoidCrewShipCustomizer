@@ -7,6 +7,7 @@ namespace VoidCrewShipCustomizer
     {
         public static ConfigEntry<bool> Enabled;
         public static ConfigEntry<bool> AllowAnySize;
+        public static ConfigEntry<bool> AnyItemOnAnyRack;
         public static ConfigEntry<bool> CopyPresetModuleContents;
         public static ConfigEntry<bool> ShowQuestItems;
         public static ConfigEntry<bool> WriteGameDataReport;
@@ -19,6 +20,9 @@ namespace VoidCrewShipCustomizer
 
             AllowAnySize = config.Bind("Rules", "AllowAnySize", false,
                 "Let any module or weapon go in any slot, whatever its size. Off by default: a 2x1 module in a 1x1 slot can stick through walls or block a corridor.");
+            AnyItemOnAnyRack = config.Bind("Rules", "AnyItemOnAnyRack", true,
+                "Let any item go in any storage rack slot, both when setting up a CUSTOM loadout and during a CUSTOM run. Big items can stick out of small slots. " +
+                "Turn off to keep each rack's usual rules (for example ammo only).");
             CopyPresetModuleContents = config.Bind("Rules", "CopyPresetModuleContents", true,
                 "When you fit a module or weapon that one of the game's own loadouts also uses, it starts with the same contents that loadout gives it (for example a loaded ammo crate or power cell).");
             ShowQuestItems = config.Bind("Rules", "ShowQuestItems", false,

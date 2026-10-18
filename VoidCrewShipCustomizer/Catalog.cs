@@ -588,8 +588,9 @@ namespace VoidCrewShipCustomizer
         // ---------------------------------------------------------------- storage racks
 
         /// <summary>
-        /// Whether a storage rack takes an item, using the same accepted / rejected rules the game checks when it puts the
-        /// item on the rack at mission start. An item the rack refuses would be left lying next to it.
+        /// Whether a storage rack normally takes an item: the accepted / rejected rules its slots check when a player puts
+        /// an item in by hand. The game doesn't check them when it fills the racks at mission start, so any item can start
+        /// on any rack; the picker only uses this when the AnyItemOnAnyRack setting is off.
         /// </summary>
         public static bool ShelfAccepts(ShelfInfo shelf, Option item)
         {

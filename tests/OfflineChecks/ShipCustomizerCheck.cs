@@ -91,6 +91,7 @@ internal static class Program
         Method("CG.Profile.PlayerProfileData", "AddQuestProgress");
         Method("CG.Cloud.CloudPlayerProfileDataSync", "AddQuestProgress");
         Method("CG.Profile.PhotonPlayerDataSync", "AddQuestProgress");
+        Method("CG.Ship.Hull.CarryablesSocket", "DoesAccept", "carryable");
 
         Console.WriteLine("Fields read by name (Harmony ___field injection and reflection):");
         Field("UI.ShipLoadoutTerminal.ModuleLayout", "slots", "System.Collections.Generic.List`1<UI.PowerTerminal.SlotVE>");
@@ -273,6 +274,68 @@ internal static class Program
         object old = deserialize.Invoke(null, new object[] { "{\"Version\":1,\"Ships\":{},\"CustomRuns\":[]}", store });
         Check(store.GetField("SecondShips").GetValue(old) is IDictionary, "a 0.3.0 save file loads, with no ship 2 layouts");
 
+        // 0.5.0: the fabricator's starting alloys and level. Older files (and older versions on other PCs) leave them out.
+        Check((int)config.GetField("Alloys").GetValue(copy) == -1 && (int)config.GetField("FabricatorLevel").GetValue(copy) == 0,
+            "a new CUSTOM loadout starts with the game's own alloys and a MK I fabricator");
+        config.GetField("Alloys").SetValue(original, 750);
+        config.GetField("FabricatorLevel").SetValue(original, 2);
+        object fabricatorCopy = config.GetMethod("Clone").Invoke(original, null);
+        Check((int)config.GetField("Alloys").GetValue(fabricatorCopy) == 750 && (int)config.GetField("FabricatorLevel").GetValue(fabricatorCopy) == 2,
+            "starting alloys and fabricator level survive a save and load");
+        object older = deserialize.Invoke(null, new object[] { "{\"Slots\":{\"3\":\"w:0123456789abcdef0123456789abcdef\"},\"Storage\":{},\"Homunculus\":\"\"}", config });
+        Check((int)config.GetField("Alloys").GetValue(older) == -1 && (int)config.GetField("FabricatorLevel").GetValue(older) == 0,
+            "a 0.4.0 CUSTOM loadout loads with the game's own alloys and a MK I fabricator");
+        config.GetField("Alloys").SetValue(older, 5000000);
+        config.GetField("FabricatorLevel").SetValue(older, 9);
+        config.GetMethod("Normalized").Invoke(older, null);
+        Check((int)config.GetField("Alloys").GetValue(older) == 100000 && (int)config.GetField("FabricatorLevel").GetValue(older) == 2,
+            "alloys and fabricator level are kept in range (at most 100000 and MK III)");
+
+        // 0.5.0: other players' changes are saved on the host's PC, so only what the ship has is kept.
+        Console.WriteLine("Changes from other players:");
+        Type hullType = plugin.GetType("VoidCrewShipCustomizer.HullInfo", true);
+        Type shelfType = plugin.GetType("VoidCrewShipCustomizer.ShelfInfo", true);
+        object hullInfo = Activator.CreateInstance(hullType);
+        IList hullSockets = (IList)hullType.GetField("Sockets").GetValue(hullInfo);
+        foreach (object socket in sockets) hullSockets.Add(socket);
+        object shelf = Activator.CreateInstance(shelfType);
+        shelfType.GetField("CoreIndex").SetValue(shelf, 12);
+        IList shelfSlots = (IList)shelfType.GetField("Slots").GetValue(shelf);
+        shelfSlots.Add(null);
+        shelfSlots.Add(null);
+        ((IList)hullType.GetField("Shelves").GetValue(hullInfo)).Add(shelf);
+        object edit = Activator.CreateInstance(config);
+        var editSlots = (IDictionary)config.GetField("Slots").GetValue(edit);
+        editSlots[3] = "w:0123456789abcdef0123456789abcdef";
+        editSlots[13] = "m:fedcba9876543210fedcba9876543210";
+        editSlots[-1] = "m:fedcba9876543210fedcba9876543210";
+        var editStorage = (IDictionary)config.GetField("Storage").GetValue(edit);
+        editStorage[12] = new List<string> { "i:00112233445566778899aabbccddeeff", "", "i:00112233445566778899aabbccddeeff" };
+        editStorage[99] = new List<string> { "i:00112233445566778899aabbccddeeff" };
+        config.GetField("Homunculus").SetValue(edit, new string('x', 200));
+        config.GetField("Alloys").SetValue(edit, -50);
+        config.GetField("FabricatorLevel").SetValue(edit, 1);
+        object clean = plugin.GetType("VoidCrewShipCustomizer.CustomLoadouts", true).GetMethod("Sanitize").Invoke(null, new[] { hullInfo, edit });
+        var cleanSlots = (IDictionary)config.GetField("Slots").GetValue(clean);
+        var cleanStorage = (IDictionary)config.GetField("Storage").GetValue(clean);
+        Check(cleanSlots.Count == 1 && cleanSlots.Contains(3), "only hardpoint positions the ship has are kept (got " + cleanSlots.Count + ")");
+        Check(cleanStorage.Count == 1 && ((List<string>)cleanStorage[12]).Count == 2, "only racks the ship has are kept, with no more items than slots");
+        Check((string)config.GetField("Homunculus").GetValue(clean) == "", "an over-long code is dropped");
+        Check((int)config.GetField("Alloys").GetValue(clean) == -1 && (int)config.GetField("FabricatorLevel").GetValue(clean) == 1, "alloys and fabricator level from another player are kept in range");
+
+        Type sync = plugin.GetType("VoidCrewShipCustomizer.RoomSync", true);
+        Check((int)sync.GetField("Protocol").GetValue(null) == 2, "players are tagged with protocol 2 (0.5.0: everyone with the mod can change CUSTOM)");
+        Type editType = plugin.GetType("VoidCrewShipCustomizer.RoomSync+RoomEdit", true);
+        object roomEdit = Activator.CreateInstance(editType);
+        editType.GetField("Room").SetValue(roomEdit, "a room");
+        editType.GetField("N").SetValue(roomEdit, 7);
+        editType.GetField("Ship").SetValue(roomEdit, 2);
+        editType.GetField("Config").SetValue(roomEdit, original);
+        object arrived = deserialize.Invoke(null, new object[] { (string)serialize.Invoke(null, new[] { roomEdit }), editType });
+        Check((string)editType.GetField("Room").GetValue(arrived) == "a room" && (int)editType.GetField("N").GetValue(arrived) == 7 && (int)editType.GetField("Ship").GetValue(arrived) == 2 &&
+              (int)config.GetField("Alloys").GetValue(editType.GetField("Config").GetValue(arrived)) == 750,
+            "a change sent to the host arrives whole (room, number, ship, loadout)");
+
         // CUSTOM GUIDs: the same per ship for every player, and the XOR undoes itself (TryGetDefOfCustomGuid relies on it).
         Console.WriteLine("CUSTOM loadout ids:");
         Type guid = System.Type.GetType("GUIDUnion, ResourceAssets", true);
@@ -289,6 +352,19 @@ internal static class Program
             object custom = customGuidFor.Invoke(null, new[] { hull });
             object back = customGuidFor.Invoke(null, new[] { custom });
             Check(custom.ToString() == ship[2] && back.ToString() == ship[1], ship[0] + " CUSTOM id is " + ship[2] + " and maps back to the ship (got " + custom + ")");
+        }
+
+        // The room properties holding the host's shared CUSTOM loadouts: named per player ship and ship type.
+        Console.WriteLine("Shared CUSTOM loadouts in the room:");
+        object destroyer = Activator.CreateInstance(guid, "4bc2ff9e1d156c94a9c94286a7aaa79b");
+        string key = (string)sync.GetMethod("LayoutKey").Invoke(null, new[] { (object)2, destroyer });
+        Check(key == "SC_Layout2_4bc2ff9e1d156c94a9c94286a7aaa79b", "ship 2's Destroyer loadout is the room property " + key);
+        MethodInfo parse = sync.GetMethod("TryParseLayoutKey", BindingFlags.NonPublic | BindingFlags.Static);
+        var parsed = new object[] { key, null, null };
+        Check((bool)parse.Invoke(null, parsed) && (int)parsed[1] == 2 && parsed[2].ToString() == "4bc2ff9e1d156c94a9c94286a7aaa79b", "that name reads back as ship 2, Destroyer");
+        foreach (string other in new[] { "SC_Layout3_4bc2ff9e1d156c94a9c94286a7aaa79b", "SC_Layout1", "SC_Layout1_", "SC_Custom" })
+        {
+            Check(!(bool)parse.Invoke(null, new object[] { other, null, null }), "\"" + other + "\" is not taken for a shared loadout");
         }
     }
 

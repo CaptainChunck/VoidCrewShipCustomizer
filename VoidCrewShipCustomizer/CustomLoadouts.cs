@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using CG.Game;
+using CG.Ship.Modules;
+using CG.Space;
 using CG.UI.MainMenu;
 using Client.Player.Interactions;
 using Gameplay.CompositeWeapons;
@@ -61,6 +64,21 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>Host: this mission's ship 2 started with a CUSTOM loadout.</summary>
         private static bool _ship2CustomRun;
+
+        /// <summary>Host: the mission now starting continues a saved run.</summary>
+        private static bool _missionIsSavedRun;
+
+        /// <summary>Host: the fabricator level ship 1 and ship 2 still have to start at (0: nothing to do).</summary>
+        private static readonly int[] PendingFabricatorLevels = new int[2];
+        private static float _shipSeenAt = -1f;
+
+        /// <summary>
+        /// For players other than a host that shares them (protocol 2): the host's CUSTOM loadouts by ship type, for
+        /// ship 1, and ship 2's own where it has one (otherwise ship 2 follows ship 1's).
+        /// </summary>
+        private static readonly Dictionary<GUIDUnion, HullConfig> HostLayouts = new Dictionary<GUIDUnion, HullConfig>();
+        private static readonly Dictionary<GUIDUnion, HullConfig> HostLayouts2 = new Dictionary<GUIDUnion, HullConfig>();
+        private static readonly Dictionary<int, float> LastChangeToast = new Dictionary<int, float>();
 
         public static bool IsActive
         {
@@ -158,6 +176,20 @@ namespace VoidCrewShipCustomizer
             return new Entry { Hull = hull, Guid = guid, Def = def, Data = data };
         }
 
+        /// <summary>Whether a GUID is some ship's CUSTOM id, whether or not this player can use CUSTOM.</summary>
+        public static bool LooksCustom(GUIDUnion guid)
+        {
+            if (guid.IsNull) return false;
+            try
+            {
+                return Catalog.ShipGuids().Contains(CustomGuidFor(guid));
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         /// <summary>A GUID per ship that no game asset uses, the same for every player with the mod.</summary>
         private static GUIDUnion CustomGuidFor(GUIDUnion ship)
         {
@@ -177,20 +209,156 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>
-        /// The loadout to show for a ship, for the ship the terminal is setting up: the host's while the host has chosen
-        /// it, otherwise the player's own.
+        /// The loadout to show for a ship, for the ship the terminal is setting up. The host shows its own. Other players
+        /// show the host's when it shares them (0.5.0 on); with an older host, the host's while the room uses it,
+        /// otherwise their own.
         /// </summary>
         public static HullConfig ConfigToShow(HullInfo hull)
         {
-            HullConfig remote = TerminalShip == 2 ? RemoteConfig2 : RemoteConfig;
-            if (!PhotonNetwork.IsMasterClient && remote != null && RoomUses(hull)) return remote;
+            if (!PhotonNetwork.IsMasterClient)
+            {
+                HullConfig shared = HostLayout(hull, TerminalShip);
+                if (shared != null) return shared;
+                HullConfig remote = TerminalShip == 2 ? RemoteConfig2 : RemoteConfig;
+                if (remote != null && RoomUses(hull)) return remote;
+            }
             return LoadoutStore.Get(hull, TerminalShip);
         }
 
         /// <summary>Whether this player may change what the terminal shows for this ship.</summary>
         public static bool CanEdit(HullInfo hull)
         {
-            return PhotonNetwork.IsMasterClient || (TerminalShip == 2 ? RemoteConfig2 : RemoteConfig) == null || !RoomUses(hull);
+            return PhotonNetwork.IsMasterClient || EditsGoToHost(hull) || (TerminalShip == 2 ? RemoteConfig2 : RemoteConfig) == null || !RoomUses(hull);
+        }
+
+        /// <summary>A player other than the host whose changes go to the host's CUSTOM loadout (the host shares it).</summary>
+        public static bool EditsGoToHost(HullInfo hull)
+        {
+            return !PhotonNetwork.IsMasterClient && HostLayouts.ContainsKey(hull.ShipGuid) && RoomSync.HostSharesLayouts();
+        }
+
+        /// <summary>The host's shared CUSTOM loadout for a ship (ship 2 follows ship 1 unless it has its own), or null.</summary>
+        public static HullConfig HostLayout(HullInfo hull, int ship)
+        {
+            HullConfig config;
+            if (ship == 2 && HostLayouts2.TryGetValue(hull.ShipGuid, out config)) return config;
+            return HostLayouts.TryGetValue(hull.ShipGuid, out config) ? config : null;
+        }
+
+        /// <summary>Ship 1's CUSTOM loadout as the terminal works with it: the host's when shared, otherwise this player's.</summary>
+        public static HullConfig ShipOneConfig(HullInfo hull)
+        {
+            return EditsGoToHost(hull) ? HostLayout(hull, 1) : LoadoutStore.Get(hull);
+        }
+
+        /// <summary>Whether ship 2 uses ship 1's CUSTOM loadout (rather than one of its own) for this ship type.</summary>
+        public static bool Ship2FollowsShip1(HullInfo hull)
+        {
+            return EditsGoToHost(hull) ? !HostLayouts2.ContainsKey(hull.ShipGuid) : !LoadoutStore.HasOwnShip2(hull);
+        }
+
+        /// <summary>Other players: the host's shared loadout as read from the room (null: ship 2 follows ship 1 / none shared).</summary>
+        public static void SetHostLayout(int ship, GUIDUnion hullGuid, HullConfig config)
+        {
+            Dictionary<GUIDUnion, HullConfig> layouts = ship == 2 ? HostLayouts2 : HostLayouts;
+            if (config == null) layouts.Remove(hullGuid);
+            else layouts[hullGuid] = Normalize(config);
+            HullInfo hull;
+            if (ByShip.ContainsKey(hullGuid) && Catalog.TryGetHull(hullGuid, out hull)) Refresh(hull);
+        }
+
+        /// <summary>The host changed (or this player became the host): the old host's shared loadouts no longer apply.</summary>
+        public static void ForgetHostLayouts()
+        {
+            HostLayouts.Clear();
+            HostLayouts2.Clear();
+            RefreshAll();
+        }
+
+        /// <summary>
+        /// A player other than the host changed the host's CUSTOM loadout: show it straight away and send it to the host,
+        /// which saves it and shares it with everyone.
+        /// </summary>
+        public static bool SendEditToHost(HullInfo hull, int ship, HullConfig config, bool followShip1)
+        {
+            if (!RoomSync.SendEdit(hull, ship, config, followShip1)) return false;
+            if (followShip1) HostLayouts2.Remove(hull.ShipGuid);
+            else (ship == 2 ? HostLayouts2 : HostLayouts)[hull.ShipGuid] = config;
+            Refresh(hull);
+            return true;
+        }
+
+        /// <summary>
+        /// Host: another player changed one of its CUSTOM loadouts. The change is limited to what the ship has, saved on
+        /// this PC like the host's own changes, and shared with everyone.
+        /// </summary>
+        public static void ApplyEditAsHost(string who, int actor, RoomSync.RoomEdit edit)
+        {
+            if (edit == null || string.IsNullOrEmpty(edit.Hull) || (edit.Ship != 1 && edit.Ship != 2)) return;
+            var hullGuid = new GUIDUnion(edit.Hull);
+            HullInfo hull;
+            // Only the game's ships: a made-up GUID must not make the catalog try to read a ship that isn't there.
+            if (!Catalog.ShipGuids().Contains(hullGuid) || !Catalog.TryGetHull(hullGuid, out hull)) return;
+            if (edit.FollowShip1)
+            {
+                if (edit.Ship != 2) return;
+                LoadoutStore.ForgetShip2(hull);
+            }
+            else
+            {
+                if (edit.Config == null) return;
+                LoadoutStore.Set(hull, Sanitize(hull, edit.Config), edit.Ship);
+            }
+            OnEdited(hull, actor, edit.N);
+            TerminalUi.OnLoadoutChangedRemotely();
+            string what = (edit.Ship == 2 ? "ship 2's " : "") + "CUSTOM " + hull.Name;
+            Log.Info(who + " changed " + what + ".");
+            float last;
+            if (!LastChangeToast.TryGetValue(actor, out last) || Time.unscaledTime - last > 8f)
+            {
+                LastChangeToast[actor] = Time.unscaledTime;
+                TerminalUi.ShowToast(who + " changed " + what + ".");
+            }
+        }
+
+        /// <summary>A loadout from another player, limited to this ship's hardpoints and racks (it is saved on this PC).</summary>
+        public static HullConfig Sanitize(HullInfo hull, HullConfig config)
+        {
+            var clean = new HullConfig
+            {
+                Homunculus = Code(config.Homunculus),
+                CopiedFrom = config.CopiedFrom != null && config.CopiedFrom.Length <= 100 ? config.CopiedFrom : "",
+                Alloys = config.Alloys,
+                FabricatorLevel = config.FabricatorLevel
+            };
+            clean.Normalized();
+            if (config.Slots != null)
+            {
+                foreach (KeyValuePair<int, string> slot in config.Slots)
+                {
+                    if (slot.Key >= 0 && slot.Key < hull.Sockets.Count && !string.IsNullOrEmpty(Code(slot.Value))) clean.Slots[slot.Key] = slot.Value;
+                }
+            }
+            if (config.Storage != null)
+            {
+                foreach (ShelfInfo shelf in hull.Shelves)
+                {
+                    List<string> codes;
+                    if (config.Storage.TryGetValue(shelf.CoreIndex, out codes) && codes != null) clean.Storage[shelf.CoreIndex] = codes.Take(shelf.Slots.Count).Select(Code).ToList();
+                }
+            }
+            return clean;
+        }
+
+        /// <summary>An item or module code as saved ("m:", "w:", "i:" or "c:" and a GUID); anything else becomes empty.</summary>
+        private static string Code(string code)
+        {
+            return code != null && code.Length <= 80 ? code : "";
+        }
+
+        private static HullConfig Normalize(HullConfig config)
+        {
+            return config.Normalized();
         }
 
         /// <summary>Whether the room uses this ship's CUSTOM loadout for the ship the terminal is setting up.</summary>
@@ -391,14 +559,18 @@ namespace VoidCrewShipCustomizer
             Log.Info("The room's loadout is no longer the CUSTOM " + name + ".");
         }
 
-        /// <summary>Host only: the host changed the active CUSTOM loadout, so tell the other players.</summary>
-        public static void OnEdited(HullInfo hull)
+        /// <summary>
+        /// A CUSTOM loadout was changed and saved on this PC. On the host, tell the other players: the room's chosen
+        /// loadouts, and the shared loadouts (<paramref name="by"/> and <paramref name="n"/> name the player's change, 0 for the host's own).
+        /// </summary>
+        public static void OnEdited(HullInfo hull, int by = 0, int n = 0)
         {
             Refresh(hull);
             if (!PhotonNetwork.IsMasterClient) return;
             // Both: ship 2's layout follows ship 1's until it has its own.
             if (ActiveShip == hull.ShipGuid) RoomSync.PublishCustom(hull, LoadoutStore.Get(hull));
             if (ActiveShip2 == hull.ShipGuid) RoomSync.PublishCustom2(hull, LoadoutStore.Get(hull, 2));
+            RoomSync.PublishLayouts(hull, by, n);
         }
 
         // ---------------------------------------------------------------- ship 2 (Void Crew Fleet)
@@ -449,6 +621,8 @@ namespace VoidCrewShipCustomizer
             }
             HullConfig config = LoadoutStore.Get(hull, 2);
             ShipLoadout loadout = Build(hull, config);
+            // Continuing a saved run, the game puts the fabricators back as they were.
+            if (!_missionIsSavedRun) PendingFabricatorLevels[1] = config.FabricatorLevel;
             _ship2CustomRun = true;
             // Only ever raises the pause; ship 1's check at mission start keeps it raised (see OnMissionStarting).
             ProgressionGuard.SetHostRun(true);
@@ -465,6 +639,7 @@ namespace VoidCrewShipCustomizer
         public static void OnMissionStarting(GameSession session, PreservedGameSession preserved)
         {
             if (!PhotonNetwork.IsMasterClient || session == null) return;
+            _missionIsSavedRun = preserved != null;
 
             bool custom = false;
             if (preserved != null)
@@ -492,6 +667,9 @@ namespace VoidCrewShipCustomizer
                     {
                         HullConfig config = LoadoutStore.Get(hull);
                         session.ToLoadShipData = Build(hull, config);
+                        // The game's own starting amount for the run (-1 means its usual bonus from the players' ranks).
+                        if (config.Alloys >= 0) session.InitialAlloys = config.Alloys;
+                        PendingFabricatorLevels[0] = config.FabricatorLevel;
                         custom = true;
                         Log.Info("Starting the mission with your CUSTOM " + hull.Name + ": " + Describe(config) + ".");
                     }
@@ -527,10 +705,71 @@ namespace VoidCrewShipCustomizer
             return ModdingUtils.IsCurrentSessionModded();
         }
 
+        // ---------------------------------------------------------------- the fabricators' starting level
+
+        /// <summary>
+        /// Host, early in a fresh CUSTOM mission: each player ship's fabricator starts at its CUSTOM level, once the ship
+        /// is in the world, the way the game itself puts a saved run's fabricator back. Ship 1 is the game's player
+        /// ship; ship 2 (Void Crew Fleet) is the other one. Called a few times a second; gives up after a minute.
+        /// </summary>
+        public static void ApplyFabricatorLevels()
+        {
+            if (PendingFabricatorLevels[0] == 0 && PendingFabricatorLevels[1] == 0) return;
+            if (!PhotonNetwork.IsMasterClient || GameSessionManager.InHub || ClientGame.Current == null) return;
+            PlayerControlledShip shipOne = ClientGame.Current.PlayerShip;
+            if (shipOne == null) return;
+            if (_shipSeenAt < 0f) _shipSeenAt = Time.unscaledTime;
+            float waited = Time.unscaledTime - _shipSeenAt;
+            // A moment for the ship's own start-up (its fabricator terminal and upgrade visuals listen for the level).
+            if (waited < 1f) return;
+
+            if (PendingFabricatorLevels[0] > 0 && SetFabricatorLevel(shipOne, PendingFabricatorLevels[0], "The ship")) PendingFabricatorLevels[0] = 0;
+            if (PendingFabricatorLevels[1] > 0)
+            {
+                foreach (PlayerControlledShip ship in UnityEngine.Object.FindObjectsOfType<PlayerControlledShip>())
+                {
+                    if (ship == null || ship == shipOne) continue;
+                    if (SetFabricatorLevel(ship, PendingFabricatorLevels[1], "Ship 2")) PendingFabricatorLevels[1] = 0;
+                    break;
+                }
+            }
+            if (waited > 60f && (PendingFabricatorLevels[0] > 0 || PendingFabricatorLevels[1] > 0))
+            {
+                Log.Warn("Could not set the fabricator's CUSTOM level, so it starts at MK I.");
+                PendingFabricatorLevels[0] = PendingFabricatorLevels[1] = 0;
+            }
+        }
+
+        private static bool SetFabricatorLevel(PlayerControlledShip ship, int level, string which)
+        {
+            try
+            {
+                FabricatorModule fabricator = ship.GetModule<FabricatorModule>();
+                if (fabricator == null || fabricator.ResolvedFabricatorTiers == null || fabricator.ResolvedFabricatorTiers.Count == 0) return false;
+                // Some missions have fewer levels than MK III; the fabricator then starts at the highest they have.
+                int tier = Math.Max(0, Math.Min(level, Math.Min(HullConfig.MaxFabricatorLevel, fabricator.ResolvedFabricatorTiers.Count - 1)));
+                if (fabricator.CurrentTier != tier) fabricator.SetFabricatorTier(tier);
+                Log.Info(which + "'s fabricator starts at " + FabricatorLevelName(tier) + (tier < level ? " (the highest this mission has)" : "") + ".");
+                return true;
+            }
+            catch (Exception e)
+            {
+                Log.Verbose("The fabricator isn't ready for its CUSTOM level yet: " + e.Message);
+                return false;
+            }
+        }
+
+        public static string FabricatorLevelName(int level)
+        {
+            return level == 2 ? "MK III" : (level == 1 ? "MK II" : "MK I");
+        }
+
         /// <summary>Back in the hub after a CUSTOM mission: choose that CUSTOM loadout again, as the game does for its own.</summary>
         public static void OnHubLoaded(HubShipManager manager)
         {
             _ship2CustomRun = false;
+            PendingFabricatorLevels[0] = PendingFabricatorLevels[1] = 0;
+            _shipSeenAt = -1f;
             if (!PhotonNetwork.IsMasterClient || ResumeShip.IsNull || manager == null) return;
             GUIDUnion ship = ResumeShip;
             ResumeShip = GUIDUnion.Empty();
@@ -550,6 +789,9 @@ namespace VoidCrewShipCustomizer
             RemoteConfig2 = null;
             _ship2CustomRun = false;
             TerminalShip = 1;
+            HostLayouts.Clear();
+            HostLayouts2.Clear();
+            LastChangeToast.Clear();
             RefreshAll();
         }
 
@@ -561,7 +803,10 @@ namespace VoidCrewShipCustomizer
                 Option option;
                 names.Add(Catalog.TryGetOption(code, out option) ? option.Name : code);
             }
-            return (names.Count == 0 ? "no modules" : string.Join(", ", names.ToArray())) + "; " + config.StoredCount + " items in storage";
+            string text = (names.Count == 0 ? "no modules" : string.Join(", ", names.ToArray())) + "; " + config.StoredCount + " items in storage";
+            if (config.Alloys >= 0) text += "; " + config.Alloys + " alloys";
+            if (config.FabricatorLevel > 0) text += "; fabricator " + FabricatorLevelName(config.FabricatorLevel);
+            return text;
         }
     }
 }

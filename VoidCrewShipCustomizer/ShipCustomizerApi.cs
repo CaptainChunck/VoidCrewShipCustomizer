@@ -66,15 +66,16 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>
         /// Host: null when this player may give ship 2 this CUSTOM loadout now, otherwise the reason (for that player).
-        /// The rules are ship 1's: the host chooses, everyone in the room has this plugin, the room is [mod_session].
+        /// The rules are ship 1's: any player with this plugin may choose it (0.5.0 on; before, only the host), everyone
+        /// in the room has this plugin, and the room is [mod_session].
         /// </summary>
         public static string CheckShip2(GUIDUnion loadout, int actorNumber)
         {
             try
             {
                 if (GetDef(loadout) == null) return "That CUSTOM loadout isn't available.";
-                Photon.Realtime.Player host = PhotonNetwork.MasterClient;
-                if (host == null || host.ActorNumber != actorNumber) return "Only the host can choose the CUSTOM loadout.";
+                if (!PhotonNetwork.IsMasterClient) return "Only the host can check this.";
+                if (!RoomSync.PlayerHasMod(actorNumber)) return "You need Ship Customizer to choose CUSTOM.";
                 List<string> missing = RoomSync.PlayersWithoutMod(false);
                 if (missing.Count > 0)
                 {

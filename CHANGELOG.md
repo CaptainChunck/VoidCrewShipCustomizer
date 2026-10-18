@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0
+
+- **Every player with Ship Customizer can choose CUSTOM and change it**, not only the host.
+  - Everyone sees and changes the host's CUSTOM loadouts, and the changes are saved on the host's PC. COPY LOADOUT has
+    **YOUR OWN CUSTOM** to bring in the one saved on your PC.
+  - With Void Crew Fleet, any player can set up and choose ship 2's CUSTOM too.
+  - Needs the host on 0.5.0 or newer. With an older host, only the host can, as before.
+- **Storage racks take any item in any slot**, in the CUSTOM editor and during a CUSTOM run (setting AnyItemOnAnyRack).
+- New **FABRICATOR** button: the alloys a run starts with, and the fabricator's level (MK I to MK III). With Void Crew
+  Fleet, ship 2's fabricator gets its own level, and both ships start with ship 1's alloys.
+- The CUSTOM buttons are now a section in the terminal's own style, level with DESCRIPTION and HOMUNCULUS.
+- The modding-guideline rules are unchanged: everyone in the room needs Ship Customizer for CUSTOM, CUSTOM runs give no
+  progression, and the room is closed to new players during a CUSTOM mission.
+
 ## 0.4.0
 
 - Works with **Void Crew Fleet**: its second ship can use CUSTOM too, with a layout of its own.

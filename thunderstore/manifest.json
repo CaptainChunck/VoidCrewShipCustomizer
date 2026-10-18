@@ -1,8 +1,8 @@
 {
   "name": "Ship_Customizer",
-  "version_number": "0.4.0",
+  "version_number": "0.5.0",
   "website_url": "https://github.com/CaptainChunck/VoidCrewShipCustomizer",
-  "description": "Adds a CUSTOM loadout to the ship loadout terminal: fit any weapon or module of any tier on every hardpoint, fill the storage racks and pick the homunculus. Sandbox: CUSTOM runs give no progression.",
+  "description": "Adds a CUSTOM loadout to the ship loadout terminal: any weapon or module of any tier on every hardpoint, any item on the storage racks, the fabricator's alloys and level, and the homunculus. Sandbox: no progression.",
   "dependencies": [
     "BepInEx-BepInExPack-5.4.2305"
   ]

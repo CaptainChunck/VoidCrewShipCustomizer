@@ -11,6 +11,10 @@ namespace VoidCrewShipCustomizer
     /// <summary>A Custom loadout for one ship, as the player set it up.</summary>
     internal sealed class HullConfig
     {
+        public const int MaxAlloys = 100000;
+        /// <summary>The fabricator's levels are MK I to MK III (0 to 2); the game's terminal shows no more.</summary>
+        public const int MaxFabricatorLevel = 2;
+
         /// <summary>Hardpoint position (the ship's build socket index) to an "m:" module or "w:" weapon code.</summary>
         public SortedDictionary<int, string> Slots = new SortedDictionary<int, string>();
 
@@ -23,9 +27,27 @@ namespace VoidCrewShipCustomizer
         /// <summary>Name of the game loadout this one was last copied from; shown in the description only.</summary>
         public string CopiedFrom = "";
 
+        /// <summary>Alloys the run starts with; -1 for the game's own amount (a bonus from the players' ranks).</summary>
+        public int Alloys = -1;
+
+        /// <summary>The fabricator's starting level: 0 is MK I (how every run starts), 1 MK II, 2 MK III.</summary>
+        public int FabricatorLevel;
+
         public HullConfig Clone()
         {
             return JsonConvert.DeserializeObject<HullConfig>(JsonConvert.SerializeObject(this));
+        }
+
+        /// <summary>Fills in what older files (or older versions on other PCs) leave out, and keeps the numbers in range.</summary>
+        public HullConfig Normalized()
+        {
+            if (Slots == null) Slots = new SortedDictionary<int, string>();
+            if (Storage == null) Storage = new SortedDictionary<int, List<string>>();
+            if (Homunculus == null) Homunculus = "";
+            if (CopiedFrom == null) CopiedFrom = "";
+            Alloys = Math.Max(-1, Math.Min(Alloys, MaxAlloys));
+            FabricatorLevel = Math.Max(0, Math.Min(FabricatorLevel, MaxFabricatorLevel));
+            return this;
         }
 
         public int FittedCount
@@ -144,10 +166,7 @@ namespace VoidCrewShipCustomizer
 
         private static HullConfig Normalize(HullConfig config)
         {
-            if (config.Slots == null) config.Slots = new SortedDictionary<int, string>();
-            if (config.Storage == null) config.Storage = new SortedDictionary<int, List<string>>();
-            if (config.Homunculus == null) config.Homunculus = "";
-            return config;
+            return config.Normalized();
         }
 
         public static void Save()

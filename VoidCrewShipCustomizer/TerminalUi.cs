@@ -30,6 +30,7 @@ namespace VoidCrewShipCustomizer
         }
 
         private const string PlaceholderName = "ShipCustomizerEmptyHardpoint";
+        private const string HostOnlyMessage = "This is the host's CUSTOM loadout, and the host's Ship Customizer is older than 0.5.0, so only the host can change it.";
         private const string LockedClass = "select-displayer__locked";
         private static readonly Color Orange = new Color(1f, 0.6f, 0.2f, 1f);
 
@@ -84,7 +85,9 @@ namespace VoidCrewShipCustomizer
                 _shownHull = hull;
                 DecorateSlots(hull, loadout);
                 bool roomUsesIt = CustomLoadouts.RoomUses(hull);
-                LockSelect(!PhotonNetwork.IsMasterClient, roomUsesIt ? null : "HOST ONLY", !roomUsesIt);
+                // A host on 0.5.0 or newer lets every player with the mod choose CUSTOM; older hosts keep it to themselves.
+                bool hostOnly = !PhotonNetwork.IsMasterClient && !RoomSync.HostSharesLayouts();
+                LockSelect(hostOnly, roomUsesIt ? null : "HOST ONLY", !roomUsesIt);
             }
             else
             {
@@ -138,6 +141,20 @@ namespace VoidCrewShipCustomizer
             item.name = CustomLoadouts.Header;
             var label = item.Q<Label>("Title");
             if (label != null) label.text = CustomLoadouts.Header;
+        }
+
+        /// <summary>A CUSTOM loadout changed on another player's terminal (or the host changed): redraw what shows it.</summary>
+        public static void OnLoadoutChangedRemotely()
+        {
+            try
+            {
+                if (_shownHull != null) Redisplay();
+                if (_storage != null && _storage.IsOpen) _storage.Refresh();
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Refreshing the loadout terminal", e);
+            }
         }
 
         /// <summary>The host's CUSTOM choice changed (seen through the room); redraw what depends on it.</summary>
@@ -258,7 +275,7 @@ namespace VoidCrewShipCustomizer
             if (hull == null || index < 0 || index >= hull.Sockets.Count) return;
             if (!CustomLoadouts.CanEdit(hull))
             {
-                Toast("This is the host's CUSTOM loadout. Only the host can change it.");
+                Toast(HostOnlyMessage);
                 return;
             }
             OpenSlotPicker(hull, hull.Sockets[index]);
@@ -411,36 +428,29 @@ namespace VoidCrewShipCustomizer
                 _toolbar = new VisualElement { name = "ShipCustomizerToolbar" };
                 _toolbar.style.position = Position.Absolute;
                 _toolbar.style.right = ToolbarRight;
-                _toolbar.style.bottom = ToolbarBottom;
+                _toolbar.style.top = ToolbarTop;
                 _toolbar.style.width = ToolbarWidth;
                 _toolbar.style.flexDirection = FlexDirection.Row;
                 _toolbar.style.flexWrap = Wrap.Wrap;
                 _toolbar.style.justifyContent = Justify.SpaceBetween;
+                _toolbar.pickingMode = PickingMode.Ignore;
             }
             _toolbar.Clear();
             HullInfo hull = _shownHull;
             HullConfig config = CustomLoadouts.ConfigToShow(hull);
             bool editable = CustomLoadouts.CanEdit(hull);
-            if (CustomLoadouts.TerminalShip == 2)
-            {
-                Label shipTwo = Ui.Label("SHIP 2'S CUSTOM LOADOUT", 17, Ui.Gold, true);
-                shipTwo.style.width = new Length(100, LengthUnit.Percent);
-                shipTwo.style.marginBottom = 6;
-                _toolbar.Add(shipTwo);
-            }
-            if (!editable)
-            {
-                Label viewOnly = Ui.Label("HOST'S CUSTOM LOADOUT (VIEW ONLY)", 17, Ui.Gold, true);
-                viewOnly.style.width = new Length(100, LengthUnit.Percent);
-                viewOnly.style.marginBottom = 6;
-                _toolbar.Add(viewOnly);
-            }
+            var notes = new List<string>();
+            if (CustomLoadouts.TerminalShip == 2) notes.Add("SHIP 2");
+            if (!editable) notes.Add("VIEW ONLY");
+            else if (CustomLoadouts.EditsGoToHost(hull) || RoomSync.SharingLayouts) notes.Add("SHARED");
+            AddToolbarHeader("CUSTOM", string.Join(" · ", notes.ToArray()));
             AddToolbarButton("HARDPOINTS", () => OpenHardpointList(hull));
             AddToolbarButton("STORAGE (" + config.StoredCount + ")", () => OpenStorage(hull));
             if (editable)
             {
                 AddToolbarButton("HOMUNCULUS", () => OpenHomunculusPicker(hull));
-                AddToolbarButton("COPY A LOADOUT", () => OpenCopyPicker(hull, false));
+                AddToolbarButton("FABRICATOR", () => OpenFabricatorPicker(hull));
+                AddToolbarButton("COPY LOADOUT", () => OpenCopyPicker(hull, false));
                 AddToolbarButton("EMPTY", () => OpenEmptyPicker(hull));
             }
             if (_toolbar.parent != host)
@@ -452,18 +462,60 @@ namespace VoidCrewShipCustomizer
             foreach (VisualElement child in _toolbar.Children()) Ui.Announce(child);
         }
 
+        // The section sits above SELECT, its header level with the terminal's DESCRIPTION and HOMUNCULUS headers
+        // (y 745 on the 1920 x 1080 screen; the right-hand panel starts at y 50). Its height is fixed so the last row of
+        // buttons always ends just above SELECT (y 921).
         private const float ToolbarRight = 29f;
-        private const float ToolbarBottom = 122f;
+        private const float ToolbarTop = 695f;
         private const float ToolbarWidth = 362f;
+        private const float ToolbarHeaderHeight = 52f;
+        private const float ToolbarButtonHeight = 30f;
 
+        /// <summary>The section header, styled like the terminal's own (its classes), with the game's decorative line under it.</summary>
+        private static void AddToolbarHeader(string title, string note)
+        {
+            var row = new VisualElement { pickingMode = PickingMode.Ignore };
+            row.style.width = new Length(100, LengthUnit.Percent);
+            row.style.height = ToolbarHeaderHeight;
+            row.style.flexDirection = FlexDirection.Row;
+            row.style.alignItems = Align.Center;
+            row.style.justifyContent = Justify.SpaceBetween;
+            Label header = Ui.GameLabel(title, "ui-text-size__large", "ui-text-color__white", "loadout-panel-header", "ui-text-dropshadow");
+            header.style.flexShrink = 0;
+            row.Add(header);
+            if (!string.IsNullOrEmpty(note))
+            {
+                Label noteLabel = Ui.Label(note, 17, Ui.Gold, true);
+                noteLabel.style.flexShrink = 1;
+                noteLabel.style.marginLeft = 10;
+                noteLabel.style.unityTextAlign = TextAnchor.MiddleRight;
+                row.Add(noteLabel);
+            }
+            _toolbar.Add(row);
+
+            var line = new VisualElement { pickingMode = PickingMode.Ignore };
+            line.AddToClassList("metem-decorative__box-border");
+            line.style.width = new Length(100, LengthUnit.Percent);
+            line.style.height = 10;
+            line.style.marginBottom = 4;
+            _toolbar.Add(line);
+        }
+
+        /// <summary>The game's small button (the small version of SELECT), sized to fit two to a row.</summary>
         private static void AddToolbarButton(string text, Action onClick)
         {
-            VisualElement button = Ui.Button(text, onClick, 17);
+            Button button = Ui.GameButton(text, onClick, "metem-button-size__small");
             button.style.width = (ToolbarWidth - 6f) / 2f;
-            button.style.height = 40;
-            button.style.marginRight = 0;
-            button.style.marginBottom = 6;
-            button.style.backgroundColor = new Color(0.08f, 0.085f, 0.09f, 0.92f);
+            button.style.height = ToolbarButtonHeight;
+            button.style.minWidth = 0;
+            button.style.minHeight = 0;
+            Ui.Margin(button, 0, 0, 5, 0);
+            button.style.paddingLeft = 4;
+            button.style.paddingRight = 4;
+            button.style.paddingTop = 0;
+            button.style.paddingBottom = 0;
+            button.style.fontSize = 17;
+            button.style.whiteSpace = WhiteSpace.NoWrap;
             _toolbar.Add(button);
         }
 
@@ -501,7 +553,7 @@ namespace VoidCrewShipCustomizer
                 });
             }
             OpenPicker("HARDPOINTS · " + hull.Name.ToUpperInvariant(),
-                editable ? "Pick a hardpoint to change what is fitted there. Port is the ship's left, starboard its right." : "The host's CUSTOM loadout; only the host can change it.",
+                editable ? "Pick a hardpoint to change what is fitted there. Port is the ship's left, starboard its right." : "The host's CUSTOM loadout; only the host can change it (their Ship Customizer is older than 0.5.0).",
                 entries, null);
         }
 
@@ -554,12 +606,69 @@ namespace VoidCrewShipCustomizer
             OpenPicker("HOMUNCULUS", "The homunculus your ship starts with in the Central Computer Cradle.", entries, null);
         }
 
+        /// <summary>Starting alloys a run can be given, besides the game's own amount.</summary>
+        private static readonly int[] AlloyChoices = { 0, 50, 100, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000, 10000 };
+
+        /// <summary>What the ship's fabricator starts with: the run's alloys, and the fabricator's level (MK I to MK III).</summary>
+        private static void OpenFabricatorPicker(HullInfo hull)
+        {
+            HullConfig config = CustomLoadouts.ConfigToShow(hull);
+            bool shipTwo = CustomLoadouts.TerminalShip == 2;
+            var entries = new List<PickerPanel.Entry>();
+            if (!shipTwo)
+            {
+                entries.Add(AlloyEntry(hull, -1, config.Alloys, "GAME DEFAULT", "The game's own starting alloys: a bonus from the players' ranks."));
+                foreach (int amount in AlloyChoices)
+                {
+                    entries.Add(AlloyEntry(hull, amount, config.Alloys, amount + " ALLOYS", amount == 0 ? "Start with none: recycle to get some." : "Spend them at the fabricator: printing and upgrades."));
+                }
+            }
+            string[] details =
+            {
+                "As every run starts.",
+                "Upgraded once: more to print, and it prints faster.",
+                "Fully upgraded: everything it can print, at its fastest."
+            };
+            for (int level = 0; level <= HullConfig.MaxFabricatorLevel; level++)
+            {
+                int chosen = level;
+                bool current = config.FabricatorLevel == level;
+                entries.Add(new PickerPanel.Entry
+                {
+                    Name = "FABRICATOR " + CustomLoadouts.FabricatorLevelName(level),
+                    Detail = details[level],
+                    Category = "LEVEL",
+                    Current = current,
+                    Tag = current ? "CHOSEN" : "",
+                    OnPick = () => Edit(hull, c => c.FabricatorLevel = chosen)
+                });
+            }
+            OpenPicker("FABRICATOR",
+                shipTwo ? "Ship 2's fabricator level. Alloys come from ship 1's CUSTOM loadout: with two ships, both start with them."
+                        : "What the ship's fabricator starts with: alloys to print and upgrade with, and its level. Saved runs keep what they had.",
+                entries, null);
+        }
+
+        private static PickerPanel.Entry AlloyEntry(HullInfo hull, int amount, int currentAmount, string name, string detail)
+        {
+            bool current = currentAmount == amount;
+            return new PickerPanel.Entry
+            {
+                Name = name,
+                Detail = detail,
+                Category = "ALLOYS",
+                Current = current,
+                Tag = current ? "CHOSEN" : "",
+                OnPick = () => Edit(hull, c => c.Alloys = amount)
+            };
+        }
+
         private static void OpenCopyPicker(HullInfo hull, bool storageOnly)
         {
             var entries = new List<PickerPanel.Entry>();
             if (CustomLoadouts.TerminalShip == 2)
             {
-                bool following = !LoadoutStore.HasOwnShip2(hull);
+                bool following = CustomLoadouts.Ship2FollowsShip1(hull);
                 entries.Add(new PickerPanel.Entry
                 {
                     Pinned = true,
@@ -574,15 +683,18 @@ namespace VoidCrewShipCustomizer
                     Pinned = true,
                     Name = "SHIP 1'S CUSTOM",
                     Detail = storageOnly ? "Copy ship 1's storage racks once." : "Copy ship 1's CUSTOM loadout once, then change what you like.",
-                    OnPick = () => Edit(hull, c =>
-                    {
-                        HullConfig shipOne = LoadoutStore.Get(hull).Clone();
-                        c.Storage = shipOne.Storage;
-                        if (storageOnly) return;
-                        c.Slots = shipOne.Slots;
-                        c.Homunculus = shipOne.Homunculus;
-                        c.CopiedFrom = "ship 1's CUSTOM";
-                    })
+                    OnPick = () => Edit(hull, c => CopyInto(c, CustomLoadouts.ShipOneConfig(hull).Clone(), storageOnly, "ship 1's CUSTOM"))
+                });
+            }
+            if (CustomLoadouts.EditsGoToHost(hull))
+            {
+                // In another player's room the terminal shows the host's CUSTOM loadouts; this player's own stay on their PC.
+                entries.Add(new PickerPanel.Entry
+                {
+                    Pinned = true,
+                    Name = "YOUR OWN CUSTOM",
+                    Detail = storageOnly ? "Copy the storage racks of the CUSTOM loadout saved on your PC." : "Copy the CUSTOM loadout saved on your PC into the room's.",
+                    OnPick = () => Edit(hull, c => CopyInto(c, LoadoutStore.Get(hull, CustomLoadouts.TerminalShip).Clone(), storageOnly, "your own CUSTOM"))
                 });
             }
             foreach (ShipLoadoutDataDef preset in hull.Presets)
@@ -618,6 +730,18 @@ namespace VoidCrewShipCustomizer
             OpenPicker(storageOnly ? "COPY STORAGE RACKS" : "COPY A LOADOUT",
                 storageOnly ? "Start the racks with what one of the game's loadouts carries." : "Replace your CUSTOM loadout with a copy of one of the game's loadouts, then change what you like.",
                 entries, null);
+        }
+
+        /// <summary>Copies a whole CUSTOM loadout (fabricator included), or only its storage racks, into the one being changed.</summary>
+        private static void CopyInto(HullConfig target, HullConfig source, bool storageOnly, string name)
+        {
+            target.Storage = source.Storage;
+            if (storageOnly) return;
+            target.Slots = source.Slots;
+            target.Homunculus = source.Homunculus;
+            target.Alloys = source.Alloys;
+            target.FabricatorLevel = source.FabricatorLevel;
+            target.CopiedFrom = name;
         }
 
         private static void OpenEmptyPicker(HullInfo hull)
@@ -678,9 +802,10 @@ namespace VoidCrewShipCustomizer
                 entries.Add(new PickerPanel.Entry { Pinned = true, Name = "EMPTY SLOT", Detail = "Leave this rack slot empty.", OnPick = () => SetStorage(hull, shelf, index, "") });
             }
             int refused = 0;
+            bool anyItem = Settings.AnyItemOnAnyRack.Value;
             foreach (Option option in Catalog.ItemOptions)
             {
-                bool fits = Catalog.ShelfAccepts(shelf, option);
+                bool fits = anyItem || Catalog.ShelfAccepts(shelf, option);
                 bool isCurrent = option.Code == currentCode;
                 string rarity = Ui.RarityName(option.Rarity);
                 var entry = new PickerPanel.Entry
@@ -716,7 +841,8 @@ namespace VoidCrewShipCustomizer
 
             Option current;
             string subtitle = !string.IsNullOrEmpty(currentCode) && Catalog.TryGetOption(currentCode, out current) ? "Now: " + current.Name + "." : "Empty.";
-            if (refused > 0) subtitle += " Greyed-out items are ones this rack refuses; they would end up on the floor.";
+            if (anyItem) subtitle += " Any item fits any rack slot; big items can stick out of small slots.";
+            else if (refused > 0) subtitle += " Greyed-out items are ones this rack normally refuses (see the AnyItemOnAnyRack setting).";
             Option currentOption;
             string tab = !string.IsNullOrEmpty(currentCode) && Catalog.TryGetOption(currentCode, out currentOption) ? currentOption.Category : null;
             OpenPicker(shelf.Name + "  ·  SLOT " + (index + 1), subtitle, entries, tab, false);
@@ -739,18 +865,31 @@ namespace VoidCrewShipCustomizer
 
         // ---------------------------------------------------------------- shared
 
+        /// <summary>
+        /// Changes the CUSTOM loadout the terminal shows. The host (or anyone with an older host, for their own loadouts)
+        /// saves it on this PC; in the room of a host on 0.5.0 or newer, the change goes to the host, who saves and shares it.
+        /// </summary>
         private static void Edit(HullInfo hull, Action<HullConfig> change)
         {
             if (!CustomLoadouts.CanEdit(hull))
             {
-                Toast("Only the host can change the CUSTOM loadout the room is using.");
+                Toast(HostOnlyMessage);
                 return;
             }
             int ship = CustomLoadouts.TerminalShip;
-            HullConfig config = LoadoutStore.GetForEdit(hull, ship);
-            change(config);
-            LoadoutStore.Set(hull, config, ship);
-            CustomLoadouts.OnEdited(hull);
+            if (CustomLoadouts.EditsGoToHost(hull))
+            {
+                HullConfig shared = CustomLoadouts.ConfigToShow(hull).Clone();
+                change(shared);
+                if (!CustomLoadouts.SendEditToHost(hull, ship, shared, false)) Toast("Your change could not be sent to the host. Try again in a moment.");
+            }
+            else
+            {
+                HullConfig config = LoadoutStore.GetForEdit(hull, ship);
+                change(config);
+                LoadoutStore.Set(hull, config, ship);
+                CustomLoadouts.OnEdited(hull);
+            }
             Redisplay();
             if (_storage != null && _storage.IsOpen) _storage.Refresh();
         }
@@ -760,11 +899,18 @@ namespace VoidCrewShipCustomizer
         {
             if (!CustomLoadouts.CanEdit(hull))
             {
-                Toast("Only the host can change the CUSTOM loadout the room is using.");
+                Toast(HostOnlyMessage);
                 return;
             }
-            LoadoutStore.ForgetShip2(hull);
-            CustomLoadouts.OnEdited(hull);
+            if (CustomLoadouts.EditsGoToHost(hull))
+            {
+                if (!CustomLoadouts.SendEditToHost(hull, 2, null, true)) Toast("Your change could not be sent to the host. Try again in a moment.");
+            }
+            else
+            {
+                LoadoutStore.ForgetShip2(hull);
+                CustomLoadouts.OnEdited(hull);
+            }
             Redisplay();
             if (_storage != null && _storage.IsOpen) _storage.Refresh();
         }
@@ -784,8 +930,8 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>
-        /// Players other than the host can't choose CUSTOM: the button stops reacting and reads HOST ONLY, unless the room
-        /// already uses this CUSTOM loadout (then it keeps the game's own SELECTED look).
+        /// With a host older than 0.5.0, players other than the host can't choose CUSTOM: the button stops reacting and
+        /// reads HOST ONLY, unless the room already uses this CUSTOM loadout (then it keeps the game's own SELECTED look).
         /// </summary>
         private static void LockSelect(bool locked, string text, bool lockedLook)
         {

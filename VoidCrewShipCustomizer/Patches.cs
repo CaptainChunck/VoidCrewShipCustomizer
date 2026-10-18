@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using CG.Objects;
 using CG.Profile;
+using CG.Ship.Hull;
 using HarmonyLib;
 using Photon.Pun;
 using ResourceAssets;
@@ -49,6 +51,8 @@ namespace VoidCrewShipCustomizer
             Patch("Gameplay.Hub.HubQuestManager", "SelectPreservedSessionQuest", nameof(SelectSavedRunPrefix), null);
             Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnDestroy", nameof(TerminalDestroyPrefix), null);
             Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnLeaveUI", null, nameof(TerminalLeavePostfix));
+            // During a CUSTOM run the storage racks take any item, as the CUSTOM editor lets them start with any item.
+            Patch("CG.Ship.Hull.CarryablesSocket", "DoesAccept", nameof(RackAcceptsPrefix), null);
 
             // The rest of progression: best effort.
             Patch("CG.Cloud.CloudRewardsProfileSync", "AddItem", nameof(BlockRewardsPrefix), null);
@@ -98,14 +102,10 @@ namespace VoidCrewShipCustomizer
             {
                 var selected = new GUIDUnion(guid);
                 HullInfo hull;
-                if (CustomLoadouts.TryGetHullOfCustomGuid(selected, out hull))
+                ShipLoadoutDataDef custom;
+                // Created here if needed: another player may choose a ship's CUSTOM before the host has looked at it.
+                if (CustomLoadouts.TryGetDefOfCustomGuid(selected, out custom) && CustomLoadouts.TryGetHullOfCustomGuid(selected, out hull))
                 {
-                    if (!CustomLoadouts.Available) return false;
-                    if (!PhotonNetwork.IsMasterClient)
-                    {
-                        TerminalUi.Toast("Only the host can choose the CUSTOM loadout.");
-                        return false;
-                    }
                     // Modding guidelines: nobody may earn progression in a sandbox run, so everyone needs the mod (which
                     // pauses their progression), and the room must be marked [mod_session] first.
                     List<string> missing = RoomSync.PlayersWithoutMod(false);
@@ -113,6 +113,14 @@ namespace VoidCrewShipCustomizer
                     {
                         Notice.Show("Everyone in the room needs Ship Customizer for CUSTOM. Not yet: " + string.Join(", ", missing.ToArray()) +
                                     ". (Just joined? Try again in a few seconds.)");
+                        return false;
+                    }
+                    if (!PhotonNetwork.IsMasterClient)
+                    {
+                        // The game sends this choice to the host, whose Ship Customizer checks it again and selects the
+                        // loadout CUSTOM stands in for. A host older than 0.5.0 keeps CUSTOM to itself.
+                        if (RoomSync.HostSharesLayouts()) return true;
+                        TerminalUi.Toast("Only the host can choose CUSTOM here: the host's Ship Customizer is older than 0.5.0.");
                         return false;
                     }
                     if (!CustomLoadouts.EnsureRoomMarkedModded())
@@ -123,6 +131,13 @@ namespace VoidCrewShipCustomizer
                     CustomLoadouts.ActivateAsHost(hull);
                     guid = hull.BasePreset.AssetGuid.AsIntArray();
                     return true;
+                }
+                if (CustomLoadouts.LooksCustom(selected))
+                {
+                    // A CUSTOM id this player can't use (CUSTOM is off here): never let the game pass it on to players
+                    // who don't know it.
+                    Log.Warn("Ignored a choice of a CUSTOM loadout, because CUSTOM is not available here.");
+                    return false;
                 }
                 if (PhotonNetwork.IsMasterClient) CustomLoadouts.DeactivateAsHost();
             }
@@ -312,6 +327,28 @@ namespace VoidCrewShipCustomizer
             catch (Exception e)
             {
                 Log.Failure("Closing the Ship Customizer pop-ups", e);
+            }
+        }
+
+        // ---------------------------------------------------------------- storage racks during a CUSTOM run
+
+        /// <summary>
+        /// A storage rack slot takes any item during a CUSTOM run (setting AnyItemOnAnyRack), so items that started on an
+        /// unusual rack can go back after being taken off. The game checks a slot's accepted / rejected items only on the
+        /// player who puts the item in, never on the host, so every player with the mod gets this.
+        /// </summary>
+        private static bool RackAcceptsPrefix(CarryablesSocket __instance, CarryableObject carryable, ref bool __result)
+        {
+            try
+            {
+                if (!ProgressionGuard.Active || carryable == null || !Settings.AnyItemOnAnyRack.Value || !(__instance.Module is CarryablesShelf)) return true;
+                // The rest of the game's own check: the slot's interaction side must be there and willing.
+                __result = __instance.CarryablesSocketActor != null && __instance.CarryablesSocketActor.DoesAccept(carryable);
+                return false;
+            }
+            catch
+            {
+                return true;
             }
         }
 

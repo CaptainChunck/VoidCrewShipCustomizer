@@ -14,10 +14,11 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
    - **Click a hardpoint** on the ship picture (a **+** marks a free one) to get every weapon and module that fits it,
      with rarity colours and the game's tooltips. A 2x1 hardpoint takes one 2x1 module or two 1x1 modules.
    - **HARDPOINTS** lists every hardpoint as a big row (port or starboard, bow to aft), handy in VR.
-   - **STORAGE** opens every storage rack: click a slot to choose ammo, power cells, repair plates, materials, animus
-     crates, weapon crates, mods or relics.
+   - **STORAGE** opens every storage rack: click a slot to put any item there (ammo, power cells, repair plates,
+     materials, animus crates, weapon crates, mods or relics).
    - **HOMUNCULUS** picks the standard homunculus or any Blessed Homunculus.
-   - **COPY A LOADOUT** starts from any of the game's loadouts, including the challenge ones.
+   - **FABRICATOR** sets how many alloys the run starts with, and the fabricator's level (MK I to MK III).
+   - **COPY LOADOUT** starts from any of the game's loadouts, including the challenge ones.
    - **EMPTY** clears the hardpoints, the racks, or everything.
 4. Press **SELECT** and start a mission as usual.
 
@@ -27,19 +28,23 @@ Your CUSTOM loadouts are saved per ship and kept between sessions.
 
 Ship Customizer follows Void Crew's official modding guidelines for sandbox mods:
 
-- **Only the host** can choose CUSTOM, and **everyone in the room needs Ship Customizer** for it. If someone without the
-  mod joins while CUSTOM is chosen, the room goes back to ROOKIE. Nobody is kicked.
+- **Every player with Ship Customizer can choose CUSTOM and change it**, and **everyone in the room needs Ship
+  Customizer** for it. If someone without the mod joins while CUSTOM is chosen, the room goes back to ROOKIE. Nobody is
+  kicked.
 - Rooms you host are marked **[mod_session]** in the server list. Players need "Can join [mod_session] games" turned on to
   join them.
 - **A CUSTOM run gives nobody XP, rewards, quest progress or achievements**, and the room is closed to new players until
   the CUSTOM mission is over. A saved CUSTOM run stays without progression when you continue it.
-- Other players with the mod see the host's CUSTOM loadout on their terminal.
+- The CUSTOM loadouts are the host's: everyone sees and changes them, and the changes are saved on the host's PC. With a
+  host on 0.4.0 or older, only the host can.
+- During a CUSTOM run the storage racks take any item.
 
 ## Works with Void Crew Fleet
 
 With Void Crew Fleet installed, its second ship can use CUSTOM too. Under SHIP 2 the terminal shows ship 2's CUSTOM
-loadout: the same as ship 1's until you change it there. COPY A LOADOUT has SAME AS SHIP 1 to go back. The same rules
-apply to both ships.
+loadout: the same as ship 1's until you change it there. COPY LOADOUT has SAME AS SHIP 1 to go back. Ship 2's fabricator
+gets its own level, and both ships start with ship 1's alloys. Any player can set ship 2 up, and the same rules apply to
+both ships.
 
 ## Settings
 
@@ -49,6 +54,7 @@ apply to both ships.
 |---|---|---|
 | General > Enabled | true | Turn the mod off without removing it. |
 | Rules > AllowAnySize | false | Let any module go in any hardpoint, whatever its size. Big modules in small hardpoints can stick through walls. |
+| Rules > AnyItemOnAnyRack | true | Any item goes in any storage rack slot, in the CUSTOM editor and during a CUSTOM run. Big items can stick out of small slots. |
 | Rules > CopyPresetModuleContents | true | A module that a game loadout also uses starts with the same contents (loaded ammo crate, power cell). |
 | Rules > ShowQuestItems | false | List quest items in the storage picker. They can confuse mission objectives. |
 | Diagnostics > WriteGameDataReport | true | Writes everything the mod found to `ShipCustomizer\game-data.txt` in the game's save folder, for bug reports. |

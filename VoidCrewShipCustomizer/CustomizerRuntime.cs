@@ -55,6 +55,15 @@ namespace VoidCrewShipCustomizer
             {
                 Log.Failure("Updating the progression pause", e);
             }
+
+            try
+            {
+                CustomLoadouts.ApplyFabricatorLevels();
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Setting the fabricator's CUSTOM level", e);
+            }
         }
     }
 }
