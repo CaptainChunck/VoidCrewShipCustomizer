@@ -96,6 +96,8 @@ Open `VoidCrewShipCustomizer.slnx` in Visual Studio 2026 (or run MSBuild) and bu
 the game's and BepInEx's DLLs from your install (they are not in this repository); if yours are elsewhere, change
 `VoidCrewDir` and `BepInExDir` at the top of `VoidCrewShipCustomizer\VoidCrewShipCustomizer.csproj`.
 
+- `tests\build-and-test.ps1` builds Release and runs the offline checks against your game's assemblies (no game needed):
+  every game member the mod looks up by name must exist, and the hardpoint rules and save format must behave.
 - `tools\package.ps1` builds Release and writes the Thunderstore upload to `dist\VoidCrewShipCustomizer-<version>.zip`.
 - `tools\make-icon.ps1` redraws `thunderstore\icon.png`.
 
