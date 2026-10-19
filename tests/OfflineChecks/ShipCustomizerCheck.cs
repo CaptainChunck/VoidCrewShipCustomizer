@@ -11,10 +11,12 @@ using Mono.Cecil;
 //     Assembly-CSharp.dll, with exactly one method of that name (AccessTools.Method would be ambiguous otherwise);
 //  2. the plugin's hardpoint rules give the expected answers on a made-up ship layout;
 //  3. a Custom loadout config survives a JSON round trip with the game's Newtonsoft;
-//  4. the public API other plugins (Void Crew Fleet) call by reflection keeps its names and signatures.
+//  4. the public API other plugins (Void Crew Fleet) call by reflection keeps its names and signatures;
+//  5. Void Crew Fleet's own API has the members this plugin looks up by name (when Fleet's DLL is there), and without
+//     Fleet everything for a second ship stays off.
 // Run it with tests\build-and-test.ps1, which builds the plugin first. When the plugin starts looking up another game
 // member by name (a Harmony patch target, a ___field injection, AccessTools.Field/Method), add a check for it below.
-// Usage: ShipCustomizerCheck.exe <plugin dir> <game Managed dir> <BepInEx core dir> [<desktop Newtonsoft.Json dir>]
+// Usage: ShipCustomizerCheck.exe <plugin dir> <game Managed dir> <BepInEx core dir> [<desktop Newtonsoft.Json dir> [<VoidCrewFleet.dll>]]
 internal static class Program
 {
     private static string[] _dirs;
@@ -28,6 +30,7 @@ internal static class Program
         {
             StaticChecks(Path.Combine(args[1], "Assembly-CSharp.dll"));
             ApiChecks(Path.Combine(args[0], "VoidCrewShipCustomizer.dll"));
+            FleetApiChecks(args.Length > 4 ? args[4] : null);
             LogicChecks(Assembly.LoadFrom(Path.Combine(args[0], "VoidCrewShipCustomizer.dll")));
         }
         catch (Exception e)
@@ -168,6 +171,35 @@ internal static class Program
         EventDefinition cancelled = api.Events.FirstOrDefault(e => e.Name == "Ship2CustomCancelled");
         Check(cancelled != null && cancelled.EventType.FullName == "System.Action" && cancelled.AddMethod.IsPublic && cancelled.AddMethod.IsStatic,
             "public static event System.Action Ship2CustomCancelled");
+    }
+
+    // ------------------------------------------------------------------ 5. Void Crew Fleet's API (read from its DLL, not loaded)
+
+    private static void FleetApiChecks(string fleetPath)
+    {
+        Console.WriteLine("Void Crew Fleet's team API (FleetLink looks these up by name):");
+        if (string.IsNullOrEmpty(fleetPath) || !File.Exists(fleetPath))
+        {
+            Console.WriteLine("  skip Void Crew Fleet's DLL wasn't found" + (string.IsNullOrEmpty(fleetPath) ? "" : " at " + fleetPath));
+            return;
+        }
+        TypeDefinition api = ModuleDefinition.ReadModule(fleetPath).GetType("VoidCrewFleet.FleetApi");
+        if (api == null)
+        {
+            Check(false, "VoidCrewFleet.FleetApi exists");
+            return;
+        }
+        FieldDefinition version = api.Fields.FirstOrDefault(f => f.Name == "ApiVersion");
+        Check(version != null && version.IsPublic && version.HasConstant && Equals(version.Constant, 1), "FleetApi.ApiVersion is a public const int = 1");
+        PropertyDefinition teamMatch = api.Properties.FirstOrDefault(p => p.Name == "IsTeamMatch");
+        Check(teamMatch != null && teamMatch.GetMethod != null && teamMatch.GetMethod.IsPublic && teamMatch.GetMethod.IsStatic && teamMatch.PropertyType.FullName == "System.Boolean",
+            "public static bool IsTeamMatch { get; }");
+        ApiMethod(api, "TeamOfShip", "System.Int32", "System.Int32");
+        ApiMethod(api, "CanEditShip", "System.Boolean", "System.Int32", "System.Int32");
+        ApiMethod(api, "ShipColor", "UnityEngine.Color", "System.Int32");
+        EventDefinition changed = api.Events.FirstOrDefault(e => e.Name == "TeamsChanged");
+        Check(changed != null && changed.EventType.FullName == "System.Action" && changed.AddMethod.IsPublic && changed.AddMethod.IsStatic,
+            "public static event System.Action TeamsChanged");
     }
 
     private static void ApiMethod(TypeDefinition api, string name, string returns, params string[] parameters)
@@ -366,6 +398,24 @@ internal static class Program
         {
             Check(!(bool)parse.Invoke(null, new object[] { other, null, null }), "\"" + other + "\" is not taken for a shared loadout");
         }
+
+        // Ship Customizer on its own: no Void Crew Fleet, so nothing for a second ship and no team rules.
+        Console.WriteLine("Without Void Crew Fleet:");
+        Type log = System.Type.GetType("BepInEx.Logging.ManualLogSource, BepInEx", true);
+        plugin.GetType("VoidCrewShipCustomizer.Log", true).GetMethod("Init").Invoke(null, new[] { Activator.CreateInstance(log, "offline checks") });
+        Type fleet = plugin.GetType("VoidCrewShipCustomizer.FleetLink", true);
+        Check(!(bool)fleet.GetProperty("Running").GetValue(null, null), "Fleet counts as not running");
+        Check((bool)fleet.GetMethod("CanEditShip").Invoke(null, new object[] { 5, 1 }) && (bool)fleet.GetMethod("CanEditShip").Invoke(null, new object[] { 5, 2 }),
+            "every player may change every ship (no team rules)");
+        Check(fleet.GetMethod("TeamNameOfShip").Invoke(null, new object[] { 2 }) == null && fleet.GetMethod("ShipColor").Invoke(null, new object[] { 2 }) == null,
+            "no team names or colours");
+        Type api = plugin.GetType("VoidCrewShipCustomizer.ShipCustomizerApi", true);
+        api.GetMethod("SetTerminalShip").Invoke(null, new object[] { 2 });
+        Check((int)plugin.GetType("VoidCrewShipCustomizer.CustomLoadouts", true).GetField("TerminalShip").GetValue(null) == 1, "the terminal stays on ship 1 when asked for ship 2");
+        object destroyerCustom = Activator.CreateInstance(guid, "7e466b9b294059d15d1dd623f38fb589");
+        var refusal = (string)api.GetMethod("CheckShip2").Invoke(null, new[] { destroyerCustom, (object)1 });
+        Check(refusal != null && refusal.Contains("Fleet"), "ship 2 can't be given a CUSTOM loadout (\"" + refusal + "\")");
+        Check(api.GetMethod("BuildShip2").Invoke(null, new[] { destroyerCustom }) == null, "no ship 2 is built");
     }
 
     private static void AddSocket(IList sockets, Type vector3, object right, object forward, string size, float x, float y, float z)

@@ -49,7 +49,8 @@ namespace VoidCrewShipCustomizer
             get { return _backdrop.parent != null; }
         }
 
-        public PickerPanel(VisualElement host, string title, string subtitle, List<Entry> entries, string initialTab)
+        /// <param name="frame">The window's frame colour (gold, or a Void Crew Fleet team's colour in a Fleet Battle).</param>
+        public PickerPanel(VisualElement host, string title, string subtitle, List<Entry> entries, string initialTab, Color frame)
         {
             _host = host;
             _entries = entries;
@@ -70,7 +71,7 @@ namespace VoidCrewShipCustomizer
             window.style.top = new Length(7, LengthUnit.Percent);
             window.style.bottom = new Length(7, LengthUnit.Percent);
             window.style.backgroundColor = Ui.Window;
-            Ui.Border(window, 2, Ui.Gold);
+            Ui.Border(window, 2, frame);
             Ui.Radius(window, 6);
             Ui.Padding(window, 14, 18);
             window.style.flexDirection = FlexDirection.Column;

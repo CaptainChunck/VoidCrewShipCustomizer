@@ -187,11 +187,10 @@ namespace VoidCrewShipCustomizer
         public static void PublishLayouts(HullInfo hull, int by, int n)
         {
             if (!SharingLayouts) return;
-            Set(new Hashtable
-            {
-                { LayoutKey(1, hull.ShipGuid), LayoutJson(LoadoutStore.Get(hull), by, n) },
-                { LayoutKey(2, hull.ShipGuid), LoadoutStore.HasOwnShip2(hull) ? LayoutJson(LoadoutStore.Get(hull, 2), by, n) : null }
-            });
+            var properties = new Hashtable { { LayoutKey(1, hull.ShipGuid), LayoutJson(LoadoutStore.Get(hull), by, n) } };
+            // Ship 2 only exists with Void Crew Fleet running.
+            if (FleetLink.Running) properties[LayoutKey(2, hull.ShipGuid)] = LoadoutStore.HasOwnShip2(hull) ? LayoutJson(LoadoutStore.Get(hull, 2), by, n) : null;
+            Set(properties);
         }
 
         private static string LayoutJson(HullConfig config, int by, int n)
@@ -251,6 +250,12 @@ namespace VoidCrewShipCustomizer
                         int applied;
                         if (edit == null || edit.Room != room || edit.To != me.ActorNumber) continue;
                         if (AppliedEdits.TryGetValue(seenKey, out applied) && edit.N <= applied) continue;
+                        // Void Crew Fleet battle: only a ship's own team may change it (ship 1 BLUE, ship 2 RED).
+                        if (!FleetLink.CanEditShip(player.ActorNumber, edit.Ship))
+                        {
+                            Log.Info("Ignored " + NameOf(player) + "'s change to ship " + edit.Ship + "'s CUSTOM loadout: it belongs to the other team.");
+                            continue;
+                        }
                         edits.Add(new KeyValuePair<string, RoomEdit>(seenKey, edit));
                     }
                     catch (Exception e)
@@ -346,6 +351,7 @@ namespace VoidCrewShipCustomizer
             Hashtable properties = PhotonNetwork.CurrentRoom.CustomProperties;
             if (properties == null) return;
             int me = PhotonNetwork.LocalPlayer != null ? PhotonNetwork.LocalPlayer.ActorNumber : -1;
+            bool fleet = FleetLink.Running;
             bool changed = false;
             var present = new HashSet<string>();
             foreach (object rawKey in properties.Keys.ToList())
@@ -353,7 +359,8 @@ namespace VoidCrewShipCustomizer
                 var key = rawKey as string;
                 int ship;
                 GUIDUnion hullGuid;
-                if (!TryParseLayoutKey(key, out ship, out hullGuid)) continue;
+                // Ship 2's are only for Void Crew Fleet; without it running they are ignored.
+                if (!TryParseLayoutKey(key, out ship, out hullGuid) || (ship == 2 && !fleet)) continue;
                 present.Add(key);
                 var json = properties[rawKey] as string;
                 string seen;
@@ -569,6 +576,8 @@ namespace VoidCrewShipCustomizer
                 _lastCustomJson = json;
                 ApplyHostCustom(json, 1);
             }
+            // Ship 2's choice (Void Crew Fleet): read only while Fleet runs here too.
+            if (!FleetLink.Running) return;
             TryGet(CustomKey2, out value);
             json = value as string;
             if (json != _lastCustomJson2)

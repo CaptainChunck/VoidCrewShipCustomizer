@@ -10,6 +10,11 @@
 - **Storage racks take any item in any slot**, in the CUSTOM editor and during a CUSTOM run (setting AnyItemOnAnyRack).
 - New **FABRICATOR** button: the alloys a run starts with, and the fabricator's level (MK I to MK III). With Void Crew
   Fleet, ship 2's fabricator gets its own level, and both ships start with ship 1's alloys.
+- **Void Crew Fleet's Fleet Battle (PvP)**: ship 1 belongs to the BLUE team and ship 2 to the RED team, and only a ship's
+  own team can change its CUSTOM loadout (the host too); the other team's is view-only. The CUSTOM pop-ups take the
+  team's colour.
+- Without Void Crew Fleet (not installed, or turned off in its config), everything for a second ship stays off and Ship
+  Customizer works on its own.
 - The CUSTOM buttons are now a section in the terminal's own style, level with DESCRIPTION and HOMUNCULUS.
 - The modding-guideline rules are unchanged: everyone in the room needs Ship Customizer for CUSTOM, CUSTOM runs give no
   progression, and the room is closed to new players during a CUSTOM mission.

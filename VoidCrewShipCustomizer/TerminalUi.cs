@@ -30,7 +30,6 @@ namespace VoidCrewShipCustomizer
         }
 
         private const string PlaceholderName = "ShipCustomizerEmptyHardpoint";
-        private const string HostOnlyMessage = "This is the host's CUSTOM loadout, and the host's Ship Customizer is older than 0.5.0, so only the host can change it.";
         private const string LockedClass = "select-displayer__locked";
         private static readonly Color Orange = new Color(1f, 0.6f, 0.2f, 1f);
 
@@ -275,7 +274,7 @@ namespace VoidCrewShipCustomizer
             if (hull == null || index < 0 || index >= hull.Sockets.Count) return;
             if (!CustomLoadouts.CanEdit(hull))
             {
-                Toast(HostOnlyMessage);
+                Toast(CustomLoadouts.WhyNotEditable());
                 return;
             }
             OpenSlotPicker(hull, hull.Sockets[index]);
@@ -440,10 +439,12 @@ namespace VoidCrewShipCustomizer
             HullConfig config = CustomLoadouts.ConfigToShow(hull);
             bool editable = CustomLoadouts.CanEdit(hull);
             var notes = new List<string>();
-            if (CustomLoadouts.TerminalShip == 2) notes.Add("SHIP 2");
+            string team = FleetLink.TeamNameOfShip(CustomLoadouts.TerminalShip);
+            if (team != null) notes.Add(team + " TEAM'S SHIP");
+            else if (CustomLoadouts.TerminalShip == 2) notes.Add("SHIP 2");
             if (!editable) notes.Add("VIEW ONLY");
             else if (CustomLoadouts.EditsGoToHost(hull) || RoomSync.SharingLayouts) notes.Add("SHARED");
-            AddToolbarHeader("CUSTOM", string.Join(" · ", notes.ToArray()));
+            AddToolbarHeader("CUSTOM", string.Join(" · ", notes.ToArray()), FrameColor());
             AddToolbarButton("HARDPOINTS", () => OpenHardpointList(hull));
             AddToolbarButton("STORAGE (" + config.StoredCount + ")", () => OpenStorage(hull));
             if (editable)
@@ -471,8 +472,15 @@ namespace VoidCrewShipCustomizer
         private const float ToolbarHeaderHeight = 52f;
         private const float ToolbarButtonHeight = 30f;
 
+        /// <summary>Gold, or in a Void Crew Fleet battle the team colour of the ship the terminal is setting up.</summary>
+        private static Color FrameColor()
+        {
+            Color? team = FleetLink.ShipColor(CustomLoadouts.TerminalShip);
+            return team.HasValue ? team.Value : Ui.Gold;
+        }
+
         /// <summary>The section header, styled like the terminal's own (its classes), with the game's decorative line under it.</summary>
-        private static void AddToolbarHeader(string title, string note)
+        private static void AddToolbarHeader(string title, string note, Color noteColor)
         {
             var row = new VisualElement { pickingMode = PickingMode.Ignore };
             row.style.width = new Length(100, LengthUnit.Percent);
@@ -485,7 +493,7 @@ namespace VoidCrewShipCustomizer
             row.Add(header);
             if (!string.IsNullOrEmpty(note))
             {
-                Label noteLabel = Ui.Label(note, 17, Ui.Gold, true);
+                Label noteLabel = Ui.Label(note, 17, noteColor, true);
                 noteLabel.style.flexShrink = 1;
                 noteLabel.style.marginLeft = 10;
                 noteLabel.style.unityTextAlign = TextAnchor.MiddleRight;
@@ -553,7 +561,7 @@ namespace VoidCrewShipCustomizer
                 });
             }
             OpenPicker("HARDPOINTS · " + hull.Name.ToUpperInvariant(),
-                editable ? "Pick a hardpoint to change what is fitted there. Port is the ship's left, starboard its right." : "The host's CUSTOM loadout; only the host can change it (their Ship Customizer is older than 0.5.0).",
+                editable ? "Pick a hardpoint to change what is fitted there. Port is the ship's left, starboard its right." : CustomLoadouts.WhyNotEditable(),
                 entries, null);
         }
 
@@ -669,7 +677,7 @@ namespace VoidCrewShipCustomizer
             if (CustomLoadouts.TerminalShip == 2)
             {
                 bool following = CustomLoadouts.Ship2FollowsShip1(hull);
-                entries.Add(new PickerPanel.Entry
+                if (!FleetLink.IsTeamMatch) entries.Add(new PickerPanel.Entry
                 {
                     Pinned = true,
                     Name = "SAME AS SHIP 1",
@@ -781,7 +789,7 @@ namespace VoidCrewShipCustomizer
             if (host == null) return;
             CloseOverlays();
             bool editable = CustomLoadouts.CanEdit(hull);
-            _storage = new StoragePanel(host, hull, () => CustomLoadouts.ConfigToShow(hull), editable,
+            _storage = new StoragePanel(host, hull, () => CustomLoadouts.ConfigToShow(hull), editable, CustomLoadouts.WhyNotEditable(), FrameColor(),
                 (shelf, index) => OpenItemPicker(hull, shelf, index),
                 action =>
                 {
@@ -873,7 +881,7 @@ namespace VoidCrewShipCustomizer
         {
             if (!CustomLoadouts.CanEdit(hull))
             {
-                Toast(HostOnlyMessage);
+                Toast(CustomLoadouts.WhyNotEditable());
                 return;
             }
             int ship = CustomLoadouts.TerminalShip;
@@ -887,6 +895,7 @@ namespace VoidCrewShipCustomizer
             {
                 HullConfig config = LoadoutStore.GetForEdit(hull, ship);
                 change(config);
+                if (ship == 1) CustomLoadouts.KeepShip2Apart(hull);
                 LoadoutStore.Set(hull, config, ship);
                 CustomLoadouts.OnEdited(hull);
             }
@@ -899,7 +908,7 @@ namespace VoidCrewShipCustomizer
         {
             if (!CustomLoadouts.CanEdit(hull))
             {
-                Toast(HostOnlyMessage);
+                Toast(CustomLoadouts.WhyNotEditable());
                 return;
             }
             if (CustomLoadouts.EditsGoToHost(hull))
@@ -957,7 +966,7 @@ namespace VoidCrewShipCustomizer
             if (host == null) return;
             if (closeOthers) CloseOverlays();
             else if (_picker != null) _picker.Close();
-            _picker = new PickerPanel(host, title, subtitle, entries, tab);
+            _picker = new PickerPanel(host, title, subtitle, entries, tab, FrameColor());
         }
 
         private static void CloseOverlays()

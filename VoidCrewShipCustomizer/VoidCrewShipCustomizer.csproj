@@ -102,6 +102,7 @@
     <Compile Include="Catalog.cs" />
     <Compile Include="CustomLoadouts.cs" />
     <Compile Include="CustomizerRuntime.cs" />
+    <Compile Include="FleetLink.cs" />
     <Compile Include="GameDataReport.cs" />
     <Compile Include="Hardpoints.cs" />
     <Compile Include="LoadoutStore.cs" />

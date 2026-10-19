@@ -7,8 +7,9 @@ namespace VoidCrewShipCustomizer
 {
     /// <summary>
     /// For other plugins, reached through reflection only when this plugin is installed, so neither needs the other
-    /// (Void Crew Fleet uses it for its second player ship). Ship 1 is the game's own ship selection; ship 2 is a second
-    /// player ship another plugin spawns. Every member can be called at any time and never throws.
+    /// (Void Crew Fleet uses it for its second player ship). Ship 1 is the game's own ship selection; ship 2 is the second
+    /// player ship Void Crew Fleet spawns, so the ship 2 members do nothing unless Fleet is installed and turned on.
+    /// Every member can be called at any time and never throws.
     /// </summary>
     public static class ShipCustomizerApi
     {
@@ -73,6 +74,7 @@ namespace VoidCrewShipCustomizer
         {
             try
             {
+                if (!FleetLink.Running) return "Void Crew Fleet isn't running, so there is no ship 2.";
                 if (GetDef(loadout) == null) return "That CUSTOM loadout isn't available.";
                 if (!PhotonNetwork.IsMasterClient) return "Only the host can check this.";
                 if (!RoomSync.PlayerHasMod(actorNumber)) return "You need Ship Customizer to choose CUSTOM.";
@@ -97,7 +99,7 @@ namespace VoidCrewShipCustomizer
             try
             {
                 HullInfo hull;
-                if (GetDef(loadout) != null && CustomLoadouts.TryGetHullOfCustomGuid(loadout, out hull)) CustomLoadouts.ActivateShip2AsHost(hull);
+                if (FleetLink.Running && GetDef(loadout) != null && CustomLoadouts.TryGetHullOfCustomGuid(loadout, out hull)) CustomLoadouts.ActivateShip2AsHost(hull);
                 else CustomLoadouts.DeactivateShip2AsHost();
             }
             catch (Exception e)
@@ -115,7 +117,7 @@ namespace VoidCrewShipCustomizer
         {
             try
             {
-                return CustomLoadouts.BuildShip2ForMission(loadout);
+                return FleetLink.Running ? CustomLoadouts.BuildShip2ForMission(loadout) : null;
             }
             catch (Exception e)
             {

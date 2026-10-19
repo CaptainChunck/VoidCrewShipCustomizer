@@ -37,6 +37,10 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
 - **Works with [Void Crew Fleet](https://thunderstore.io/c/void-crew/)**: Fleet's second ship can use CUSTOM too, with
   a layout and fabricator level of its own (the same as ship 1's until you change it under SHIP 2). Any player can set
   it up. Both ships start with the alloys of ship 1's CUSTOM loadout.
+  - In a **Fleet Battle** (PvP), ship 1 belongs to the BLUE team and ship 2 to the RED team: only a ship's own team can
+    change its CUSTOM loadout, and the other team sees it view-only. The CUSTOM pop-ups take the team's colour.
+  - Without Fleet (not installed, or turned off in its config), all of this stays off and Ship Customizer works on its
+    own.
 - Your CUSTOM loadouts are saved per ship in
   `%USERPROFILE%\AppData\LocalLow\Hutlihut Games ApS\Void Crew\ShipCustomizer\custom-loadouts.json`.
 
@@ -131,6 +135,10 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
   `FabricatorModule.SetFabricatorTier` once the ship is in the world, as the game does when continuing a saved run.
 - During a CUSTOM run, a prefix on `CarryablesSocket.DoesAccept` lets storage rack slots take any item. The game checks it
   only on the player putting the item in; at mission start it fills the racks without checking.
+- Void Crew Fleet is optional and found through reflection (`FleetLink`): installed and turned on (its General > Enabled),
+  looked up once the hub has loaded. Its `VoidCrewFleet.FleetApi` (`IsTeamMatch`, `TeamOfShip`, `CanEditShip`,
+  `ShipColor`, `TeamsChanged`) gives the Fleet Battle team rules. The terminal follows them, and the host ignores changes
+  from the wrong team. Without Fleet, ship 2 and the team rules are off.
 - When the mission starts (`GSIngame.TransitionTo`), the host swaps the session's `ToLoadShipData` for a `ShipLoadout`
   built from the CUSTOM choices, and the game's own `ShipLoadout.InitializeShip` spawns it for everyone. Anything the game
   could not spawn is left out with a warning instead of stopping the mission from starting.

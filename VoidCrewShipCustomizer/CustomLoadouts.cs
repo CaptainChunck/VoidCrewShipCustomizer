@@ -228,7 +228,39 @@ namespace VoidCrewShipCustomizer
         /// <summary>Whether this player may change what the terminal shows for this ship.</summary>
         public static bool CanEdit(HullInfo hull)
         {
+            if (!TeamMayEdit()) return false;
             return PhotonNetwork.IsMasterClient || EditsGoToHost(hull) || (TerminalShip == 2 ? RemoteConfig2 : RemoteConfig) == null || !RoomUses(hull);
+        }
+
+        /// <summary>
+        /// In a Void Crew Fleet battle, only a ship's own team may change it (ship 1 is BLUE's, ship 2 RED's), the host
+        /// included. Always true otherwise.
+        /// </summary>
+        public static bool TeamMayEdit()
+        {
+            Photon.Realtime.Player me = PhotonNetwork.LocalPlayer;
+            return me == null || FleetLink.CanEditShip(me.ActorNumber, TerminalShip);
+        }
+
+        /// <summary>Why this player can't change the CUSTOM loadout the terminal shows, in a few words for a message.</summary>
+        public static string WhyNotEditable()
+        {
+            if (!TeamMayEdit())
+            {
+                string team = FleetLink.TeamNameOfShip(TerminalShip);
+                return team != null ? "This is the " + team + " team's ship: only its players can change it." : "Only this ship's team can change it.";
+            }
+            return "This is the host's CUSTOM loadout, and the host's Ship Customizer is older than 0.5.0, so only the host can change it.";
+        }
+
+        /// <summary>
+        /// Host, in a Fleet Battle, before ship 1's CUSTOM loadout changes: if ship 2 still follows ship 1, it keeps its
+        /// layout as it is, so one team's changes never reach the other team's ship.
+        /// </summary>
+        public static void KeepShip2Apart(HullInfo hull)
+        {
+            if (!FleetLink.IsTeamMatch || LoadoutStore.HasOwnShip2(hull)) return;
+            LoadoutStore.Set(hull, LoadoutStore.Get(hull).Clone(), 2);
         }
 
         /// <summary>A player other than the host whose changes go to the host's CUSTOM loadout (the host shares it).</summary>
@@ -295,6 +327,7 @@ namespace VoidCrewShipCustomizer
         public static void ApplyEditAsHost(string who, int actor, RoomSync.RoomEdit edit)
         {
             if (edit == null || string.IsNullOrEmpty(edit.Hull) || (edit.Ship != 1 && edit.Ship != 2)) return;
+            if (edit.Ship == 2 && !FleetLink.Running) return;
             var hullGuid = new GUIDUnion(edit.Hull);
             HullInfo hull;
             // Only the game's ships: a made-up GUID must not make the catalog try to read a ship that isn't there.
@@ -307,6 +340,7 @@ namespace VoidCrewShipCustomizer
             else
             {
                 if (edit.Config == null) return;
+                if (edit.Ship == 1) KeepShip2Apart(hull);
                 LoadoutStore.Set(hull, Sanitize(hull, edit.Config), edit.Ship);
             }
             OnEdited(hull, actor, edit.N);
@@ -367,9 +401,17 @@ namespace VoidCrewShipCustomizer
             return (TerminalShip == 2 ? ActiveShip2 : ActiveShip) == hull.ShipGuid;
         }
 
-        /// <summary>Another plugin switched the ship the terminal sets up; every CUSTOM definition now shows that ship's layout.</summary>
+        /// <summary>
+        /// Void Crew Fleet switched the ship the terminal sets up; every CUSTOM definition now shows that ship's layout.
+        /// Without Fleet running there is no ship 2, so the terminal stays on ship 1.
+        /// </summary>
         public static void SetTerminalShip(int ship)
         {
+            if (ship == 2 && !FleetLink.Running)
+            {
+                Log.WarnOnce("ship 2 without fleet", "Ignored a request to set up ship 2: Void Crew Fleet isn't running.");
+                ship = 1;
+            }
             if (TerminalShip == ship) return;
             TerminalShip = ship;
             RefreshAll();

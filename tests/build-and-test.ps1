@@ -1,10 +1,12 @@
 # Builds the plugin (Release) and runs the offline checks against the real game assemblies, without starting the game:
 # every game member the plugin looks up by name must exist, the hardpoint rules must give the expected answers, and a
 # saved CUSTOM loadout must survive a save and load. Success ends with "ALL CHECKS PASSED" and exit code 0.
-# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File tests\build-and-test.ps1 [-VoidCrewDir <game folder>] [-BepInExDir <BepInEx folder>]
+# Usage: powershell -NoProfile -ExecutionPolicy Bypass -File tests\build-and-test.ps1 [-VoidCrewDir <game folder>] [-BepInExDir <BepInEx folder>] [-FleetDll <VoidCrewFleet.dll>]
 param(
     [string]$VoidCrewDir = "G:\SteamLibrary\steamapps\common\Void Crew",
-    [string]$BepInExDir = (Join-Path $env:APPDATA "raicuparta\rai-pal\data\installed-mods\3743495372862092943\bepinex\BepInEx")
+    [string]$BepInExDir = (Join-Path $env:APPDATA "raicuparta\rai-pal\data\installed-mods\3743495372862092943\bepinex\BepInEx"),
+    # Void Crew Fleet's API is checked too when its DLL is there (by default a Release build next to this repository).
+    [string]$FleetDll = (Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) "VoidCrewFleet\VoidCrewFleet\bin\Release\VoidCrewFleet.dll")
 )
 
 $root = Split-Path $PSScriptRoot -Parent
@@ -32,5 +34,5 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Output "== Running the offline checks"
-& (Join-Path $out "ShipCustomizerCheck.exe") (Join-Path $root "VoidCrewShipCustomizer\bin\Release") (Join-Path $VoidCrewDir "Void Crew_Data\Managed") (Join-Path $BepInExDir "core") $desktopJson
+& (Join-Path $out "ShipCustomizerCheck.exe") (Join-Path $root "VoidCrewShipCustomizer\bin\Release") (Join-Path $VoidCrewDir "Void Crew_Data\Managed") (Join-Path $BepInExDir "core") $desktopJson $FleetDll
 exit $LASTEXITCODE

@@ -19,6 +19,7 @@ namespace VoidCrewShipCustomizer
         private readonly HullInfo _hull;
         private readonly Func<HullConfig> _config;
         private readonly bool _editable;
+        private readonly string _viewOnlyReason;
         private readonly Action<ShelfInfo, int> _onSlotClicked;
 
         public Action<string> OnAction;
@@ -29,11 +30,15 @@ namespace VoidCrewShipCustomizer
             get { return _backdrop.parent != null; }
         }
 
-        public StoragePanel(VisualElement host, HullInfo hull, Func<HullConfig> config, bool editable, Action<ShelfInfo, int> onSlotClicked, Action<string> onAction)
+        /// <param name="viewOnlyReason">Why the racks can't be changed, shown when <paramref name="editable"/> is false.</param>
+        /// <param name="frame">The window's frame colour (gold, or a Void Crew Fleet team's colour in a Fleet Battle).</param>
+        public StoragePanel(VisualElement host, HullInfo hull, Func<HullConfig> config, bool editable, string viewOnlyReason, Color frame,
+                            Action<ShelfInfo, int> onSlotClicked, Action<string> onAction)
         {
             _hull = hull;
             _config = config;
             _editable = editable;
+            _viewOnlyReason = viewOnlyReason;
             _onSlotClicked = onSlotClicked;
             OnAction = onAction;
 
@@ -52,7 +57,7 @@ namespace VoidCrewShipCustomizer
             window.style.top = new Length(6, LengthUnit.Percent);
             window.style.bottom = new Length(6, LengthUnit.Percent);
             window.style.backgroundColor = Ui.Window;
-            Ui.Border(window, 2, Ui.Gold);
+            Ui.Border(window, 2, frame);
             Ui.Radius(window, 6);
             Ui.Padding(window, 14, 18);
             window.style.flexDirection = FlexDirection.Column;
@@ -106,7 +111,7 @@ namespace VoidCrewShipCustomizer
             _summary.text = _hull.Shelves.Count == 0
                 ? "This ship has no storage racks the customizer can fill."
                 : string.Format("{0} of {1} slots filled. {2}", config.StoredCount, slots,
-                    _editable ? "Click a slot to choose what the ship starts with there." : "This is the host's loadout; only the host can change it.");
+                    _editable ? "Click a slot to choose what the ship starts with there." : _viewOnlyReason);
 
             foreach (ShelfInfo shelf in _hull.Shelves)
             {

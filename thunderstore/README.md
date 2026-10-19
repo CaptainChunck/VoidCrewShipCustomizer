@@ -46,6 +46,12 @@ loadout: the same as ship 1's until you change it there. COPY LOADOUT has SAME A
 gets its own level, and both ships start with ship 1's alloys. Any player can set ship 2 up, and the same rules apply to
 both ships.
 
+In a **Fleet Battle** (PvP), ship 1 belongs to the BLUE team and ship 2 to the RED team: only a ship's own team can change
+its CUSTOM loadout, and the other team sees it view-only.
+
+Without Void Crew Fleet (not installed, or turned off in its config), all of this stays off and Ship Customizer works on
+its own.
+
 ## Settings
 
 `BepInEx\config\com.captainchunck.voidcrew.shipcustomizer.cfg`:
