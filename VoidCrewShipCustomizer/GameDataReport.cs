@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -46,6 +47,10 @@ namespace VoidCrewShipCustomizer
                 {
                     text.AppendLine(string.Format("  {0,-9} {1,-4} {2,-10} {3}  {4}{5}", option.Category, option.HasSize ? Catalog.SizeName(option.Size) : "?",
                         Ui.RarityName(option.Rarity), option.Name, option.Code, option.SingleInstance ? "  (one per ship)" : ""));
+                    // The power check's numbers and the contents editor's slots, to compare with the game.
+                    List<string> usual = Catalog.UsualContents(option);
+                    text.AppendLine(string.Format("      power {0}{1}  ·  item slots {2}{3}", option.PowerUse, option.PowerMade > 0 ? ", makes " + option.PowerMade : "",
+                        Catalog.ContentSlotsOf(option).Count, usual.Any(c => c.Length > 0) ? "  ·  usual contents: " + string.Join(", ", usual.Select(c => c.Length > 0 ? NameOfItem(c) : "-").ToArray()) : ""));
                 }
                 text.AppendLine();
 
@@ -103,6 +108,7 @@ namespace VoidCrewShipCustomizer
         private static void WriteHull(StringBuilder text, HullInfo hull)
         {
             text.AppendLine(hull.Name + "  [" + hull.ShipGuid + "]");
+            text.AppendLine("  Its own power, without generators: " + hull.BasePower);
             text.AppendLine("  CUSTOM is built on, and shown to other players as: " + LoadoutStore.PresetName(hull.BasePreset) + "  [" + hull.BasePreset.AssetGuid + "]");
             text.AppendLine("  Loadouts (the terminal's list first, lowest rank first; then challenge and other loadouts):");
             foreach (ShipLoadoutDataDef preset in hull.Presets)

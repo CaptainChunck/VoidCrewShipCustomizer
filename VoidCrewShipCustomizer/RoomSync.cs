@@ -53,10 +53,11 @@ namespace VoidCrewShipCustomizer
         private const int NoticeMaxAgeMs = 5 * 60 * 1000;
 
         /// <summary>
-        /// Raised when what players exchange changes in a way older versions don't understand. 1: 0.3.0 and 0.4.0.
-        /// 2: 0.5.0, where every player with the mod can choose and change the host's CUSTOM loadouts.
+        /// Raised when what players exchange changes. 1: 0.3.0 and 0.4.0. 2: 0.5.0, where every player with the mod can
+        /// choose and change the host's CUSTOM loadouts. 3: 0.8.0, where a change carries the loadout it was made against
+        /// and the host merges it part by part (older players' whole-loadout changes still work).
         /// </summary>
-        public const int Protocol = 2;
+        public const int Protocol = 3;
 
         /// <summary>The oldest protocol that still pauses its player's progression in a CUSTOM run, so counts as having the mod.</summary>
         private const int OldestProtocol = 1;

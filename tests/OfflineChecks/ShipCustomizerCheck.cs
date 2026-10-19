@@ -96,6 +96,14 @@ internal static class Program
         Method("CG.Profile.PhotonPlayerDataSync", "AddQuestProgress");
         Method("CG.Ship.Hull.CarryablesSocket", "DoesAccept", "carryable");
         Method("ShipLoadout", "InitializeShip", "Position", "Rotation");
+        // 0.8.0: the rest of progression (tracked stats, Steam stats, daily and weekly quests), and saved CUSTOM runs that
+        // wait for everyone to have the mod.
+        Method("Gameplay.Hub.HubQuestManager", "StartQuest", "startType");
+        Method("TrackedMetric", "OnMetricProgressChange");
+        Method("CG.Profile.PlayerTrackedMetrics", "SubmitProgress");
+        Method("CloudPlayerTrackedMetricSync", "SubmitProgress");
+        Method("SteamPlayerTrackedMetrics", "SubmitProgress");
+        Method("Metaquest", "OnMetricProgress");
 
         Console.WriteLine("Fields read by name (Harmony ___field injection and reflection):");
         Field("UI.ShipLoadoutTerminal.ModuleLayout", "slots", "System.Collections.Generic.List`1<UI.PowerTerminal.SlotVE>");
@@ -397,7 +405,8 @@ internal static class Program
         config.GetField("Homunculus").SetValue(edit, new string('x', 200));
         config.GetField("Alloys").SetValue(edit, -50);
         config.GetField("FabricatorLevel").SetValue(edit, 1);
-        object clean = plugin.GetType("VoidCrewShipCustomizer.CustomLoadouts", true).GetMethod("Sanitize").Invoke(null, new[] { hullInfo, edit });
+        // The catalog half (real modules and items) needs the game running; the shape half is checked here.
+        object clean = plugin.GetType("VoidCrewShipCustomizer.CustomLoadouts", true).GetMethod("Shape", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, new[] { hullInfo, edit });
         var cleanSlots = (IDictionary)config.GetField("Slots").GetValue(clean);
         var cleanStorage = (IDictionary)config.GetField("Storage").GetValue(clean);
         Check(cleanSlots.Count == 1 && cleanSlots.Contains(3), "only hardpoint positions the ship has are kept (got " + cleanSlots.Count + ")");
@@ -406,7 +415,7 @@ internal static class Program
         Check((int)config.GetField("Alloys").GetValue(clean) == -1 && (int)config.GetField("FabricatorLevel").GetValue(clean) == 1, "alloys and fabricator level from another player are kept in range");
 
         Type sync = plugin.GetType("VoidCrewShipCustomizer.RoomSync", true);
-        Check((int)sync.GetField("Protocol").GetValue(null) == 2, "players are tagged with protocol 2 (0.5.0: everyone with the mod can change CUSTOM)");
+        Check((int)sync.GetField("Protocol").GetValue(null) == 3, "players are tagged with protocol 3 (0.8.0: changes are merged part by part)");
         Type editType = plugin.GetType("VoidCrewShipCustomizer.RoomSync+RoomEdit", true);
         object roomEdit = Activator.CreateInstance(editType);
         editType.GetField("Room").SetValue(roomEdit, "a room");
@@ -476,6 +485,9 @@ internal static class Program
         Check(ruleOptions != null && ruleOptions.Length == 0, "GetRuleOptions answers with an empty list before the hub has loaded");
 
         MatchRuleChecks(plugin, config, hullInfo);
+        SharedEditingChecks(plugin, config, sockets);
+        ShareCodeChecks(plugin, config);
+        SaveFileChecks(plugin, config);
     }
 
     // ------------------------------------------------------------------ 0.7.0: Fleet Battle match rules, blessings
@@ -589,6 +601,162 @@ internal static class Program
         Check(size("Large Power Cell") == 18 && size("Large Nano Alloy Cluster") == 15 && size("Heavy Caliber: Large Crate") == 13 &&
               size("Payload Battery: Cluster Missiles") == 13 && size(null) == 18,
             "tile names: the game's small text up to 16 letters, 15 up to 24, 13 for longer ones");
+    }
+
+    // ------------------------------------------------------------------ 0.8.0: several players changing one loadout
+
+    private static void SharedEditingChecks(Assembly plugin, Type config, IList sockets)
+    {
+        Console.WriteLine("Several players changing one loadout:");
+        Type merge = plugin.GetType("VoidCrewShipCustomizer.LayoutMerge", true);
+        var racks = new Dictionary<int, int> { { 12, 3 } };
+        Func<object> layout = () =>
+        {
+            object c = Activator.CreateInstance(config);
+            ((IDictionary)config.GetField("Slots").GetValue(c))[1] = "m:11111111111111111111111111111111";
+            ((IDictionary)config.GetField("Storage").GetValue(c))[12] = new List<string> { "i:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "", "" };
+            config.GetMethod("Normalized").Invoke(c, null);
+            return c;
+        };
+        Func<object, object> clone = c => config.GetMethod("Clone").Invoke(c, null);
+        Func<object, IDictionary> slotsOf = c => (IDictionary)config.GetField("Slots").GetValue(c);
+        Func<object, List<string>> rackOf = c => (List<string>)((IDictionary)config.GetField("Storage").GetValue(c))[12];
+        MethodInfo mergeMethod = merge.GetMethod("Merge");
+        Func<object, object, object, List<string>, List<string>, object> run = (current, seen, wanted, applied, refused) =>
+            mergeMethod.Invoke(null, new[] { current, seen, wanted, sockets, racks, applied, refused });
+
+        // A and B both start from the same loadout. B's change (rack slot 2) reached the host first; A changed the
+        // hardpoint. Both changes stay.
+        object seen = layout();
+        object current = clone(seen);
+        rackOf(current)[1] = "i:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        object wanted = clone(seen);
+        slotsOf(wanted)[1] = "m:22222222222222222222222222222222";
+        var applied = new List<string>();
+        var refused = new List<string>();
+        object merged = run(current, seen, wanted, applied, refused);
+        Check((string)slotsOf(merged)[1] == "m:22222222222222222222222222222222" && rackOf(merged)[1] == "i:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" && refused.Count == 0,
+            "changes to different parts are both kept (A's hardpoint and B's rack slot)");
+
+        // Both changed rack slot 1: B's came first, so A's is refused (and B's kept), not silently replaced.
+        current = clone(seen);
+        rackOf(current)[0] = "i:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        wanted = clone(seen);
+        rackOf(wanted)[0] = "i:cccccccccccccccccccccccccccccccc";
+        applied.Clear();
+        refused.Clear();
+        merged = run(current, seen, wanted, applied, refused);
+        Check(rackOf(merged)[0] == "i:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" && refused.Count == 1 && refused[0] == "rack:12:0",
+            "the same part changed by two players: the first change stays, the second is refused (got " + string.Join(",", refused) + ")");
+
+        // The same change twice (a resent edit) changes nothing and refuses nothing.
+        current = clone(seen);
+        rackOf(current)[2] = "i:dddddddddddddddddddddddddddddddd";
+        wanted = clone(current);
+        applied.Clear();
+        refused.Clear();
+        merged = run(current, seen, wanted, applied, refused);
+        Check(applied.Count == 0 && refused.Count == 0 && rackOf(merged)[2] == "i:dddddddddddddddddddddddddddddddd", "the same change again is no conflict");
+
+        // A hardpoint is one part with its overlapping positions: a 2x1 in #0 replaces the 1x1 in #1 as a whole.
+        current = clone(seen);
+        wanted = clone(seen);
+        slotsOf(wanted).Remove(1);
+        slotsOf(wanted)[0] = "m:33333333333333333333333333333333";
+        applied.Clear();
+        refused.Clear();
+        merged = run(current, seen, wanted, applied, refused);
+        Check(slotsOf(merged).Count == 1 && (string)slotsOf(merged)[0] == "m:33333333333333333333333333333333" && applied.Count == 1 && applied[0] == "hp:0",
+            "a hardpoint changes as a whole (the 2x1 in #0 takes the place of the 1x1 in #1)");
+
+        // What a change carries arrives whole: the loadout it was made against, and the host's answer.
+        Type json = System.Type.GetType("Newtonsoft.Json.JsonConvert, Newtonsoft.Json", true);
+        MethodInfo serialize = json.GetMethod("SerializeObject", new[] { typeof(object) });
+        MethodInfo deserialize = json.GetMethod("DeserializeObject", new[] { typeof(string), typeof(Type) });
+        Type editType = plugin.GetType("VoidCrewShipCustomizer.RoomSync+RoomEdit", true);
+        object edit = Activator.CreateInstance(editType);
+        editType.GetField("Config").SetValue(edit, wanted);
+        editType.GetField("Base").SetValue(edit, seen);
+        object arrived = deserialize.Invoke(null, new object[] { (string)serialize.Invoke(null, new[] { edit }), editType });
+        Check(editType.GetField("Base").GetValue(arrived) != null && slotsOf(editType.GetField("Base").GetValue(arrived)).Contains(1),
+            "a change carries the loadout it was made against");
+        Type layoutType = plugin.GetType("VoidCrewShipCustomizer.RoomSync+RoomLayout", true);
+        object answer = Activator.CreateInstance(layoutType);
+        layoutType.GetField("Refused").SetValue(answer, new List<string> { "STORAGE RACK 1 slot 1 (Ana)" });
+        object answered = deserialize.Invoke(null, new object[] { (string)serialize.Invoke(null, new[] { answer }), layoutType });
+        var refusedBack = (List<string>)layoutType.GetField("Refused").GetValue(answered);
+        Check(refusedBack != null && refusedBack.Count == 1 && refusedBack[0] == "STORAGE RACK 1 slot 1 (Ana)", "the host's answer says what was refused and who changed it first");
+        object older = deserialize.Invoke(null, new object[] { "{\"Room\":\"r\",\"N\":2,\"Hull\":\"x\",\"Ship\":1,\"Config\":{}}", editType });
+        Check(editType.GetField("Base").GetValue(older) == null, "a change from 0.7.0 or older has no Base (the host takes it whole, as before)");
+    }
+
+    // ------------------------------------------------------------------ 0.8.0: share codes
+
+    private static void ShareCodeChecks(Assembly plugin, Type config)
+    {
+        Console.WriteLine("Share codes:");
+        Type codes = plugin.GetType("VoidCrewShipCustomizer.ShareCodes", true);
+        object loadout = Activator.CreateInstance(config);
+        ((IDictionary)config.GetField("Slots").GetValue(loadout))[3] = "w:0123456789abcdef0123456789abcdef";
+        ((IDictionary)config.GetField("Storage").GetValue(loadout))[12] = new List<string> { "i:00112233445566778899aabbccddeeff", "", "c:0123456789abcdef0123456789abcdef" };
+        ((IDictionary)config.GetField("Contents").GetValue(loadout))[3] = new List<string> { "i:00112233445566778899aabbccddeeff", "" };
+        config.GetField("Alloys").SetValue(loadout, 500);
+        config.GetField("FabricatorLevel").SetValue(loadout, 2);
+        var code = (string)codes.GetMethod("Make").Invoke(null, new[] { (object)"4bc2ff9e1d156c94a9c94286a7aaa79b", loadout });
+        Check(code.StartsWith("SC1-") && code.Length < 1000 && code.All(c => char.IsLetterOrDigit(c) || c == '-' || c == '_'),
+            "a share code is one compressed, web-safe line (" + code.Length + " characters)");
+        MethodInfo read = codes.GetMethod("TryRead");
+        var args = new object[] { "Try my Destroyer! " + code + " good luck", null, null, null };
+        bool ok = (bool)read.Invoke(null, args);
+        object back = args[2];
+        Check(ok && (string)args[1] == "4bc2ff9e1d156c94a9c94286a7aaa79b" && (int)config.GetField("Alloys").GetValue(back) == 500 &&
+              ((List<string>)((IDictionary)config.GetField("Storage").GetValue(back))[12])[2] == "c:0123456789abcdef0123456789abcdef" &&
+              ((List<string>)((IDictionary)config.GetField("Contents").GetValue(back))[3])[0] == "i:00112233445566778899aabbccddeeff",
+            "a pasted message with a share code in it brings the whole loadout back (ship type, racks, contents, alloys)");
+        var broken = new object[] { code.Substring(0, code.Length / 2), null, null, null };
+        Check(!(bool)read.Invoke(null, broken) && broken[3] != null, "a cut-off code is refused with a reason (\"" + broken[3] + "\")");
+        var none = new object[] { "nothing to see here", null, null, null };
+        Check(!(bool)read.Invoke(null, none) && ((string)none[3]).Contains("SC1-"), "text without a code says how a code starts");
+    }
+
+    // ------------------------------------------------------------------ 0.8.0: the save files
+
+    private static void SaveFileChecks(Assembly plugin, Type config)
+    {
+        Console.WriteLine("Save files:");
+        object damaged = Activator.CreateInstance(config);
+        ((IDictionary)config.GetField("Storage").GetValue(damaged))[3] = null;
+        ((IDictionary)config.GetField("Slots").GetValue(damaged))[5] = null;
+        ((IDictionary)config.GetField("Contents").GetValue(damaged))[7] = new List<string> { "i:00112233445566778899aabbccddeeff" };
+        config.GetMethod("Normalized").Invoke(damaged, null);
+        Check(((IList)((IDictionary)config.GetField("Storage").GetValue(damaged))[3]).Count == 0 && ((IDictionary)config.GetField("Slots").GetValue(damaged)).Count == 0 &&
+              ((IDictionary)config.GetField("Contents").GetValue(damaged)).Count == 0 && (int)config.GetProperty("StoredCount").GetValue(damaged, null) == 0,
+            "a damaged loadout (a missing rack, an empty hardpoint, contents with no module) loads without errors");
+
+        Type safe = plugin.GetType("VoidCrewShipCustomizer.SafeFile", true);
+        string folder = Path.Combine(Path.GetTempPath(), "ShipCustomizerCheck-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            string file = Path.Combine(folder, "loadouts.json");
+            MethodInfo write = safe.GetMethod("Write");
+            MethodInfo read = safe.GetMethod("Read");
+            write.Invoke(null, new object[] { file, "first" });
+            write.Invoke(null, new object[] { file, "second" });
+            var args = new object[] { file, null };
+            read.Invoke(null, args);
+            Check((string)args[1] == "second" && File.ReadAllText(file + ".bak") == "first" && !File.Exists(file + ".tmp"),
+                "a save replaces the file in one step and keeps the one before as .bak");
+            File.Delete(file);
+            File.WriteAllText(file + ".tmp", "cut short");
+            args = new object[] { file, null };
+            read.Invoke(null, args);
+            Check((string)args[1] == "cut short", "a save an older version cut short (only .tmp left) is still found");
+        }
+        finally
+        {
+            Directory.Delete(folder, true);
+        }
     }
 
     private static void AddSocket(IList sockets, Type vector3, object right, object forward, string size, float x, float y, float z)

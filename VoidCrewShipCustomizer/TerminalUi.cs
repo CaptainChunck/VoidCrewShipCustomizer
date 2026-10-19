@@ -1102,9 +1102,55 @@ namespace VoidCrewShipCustomizer
                     }
                 });
             }
+            entries.Insert(0, new PickerPanel.Entry
+            {
+                Pinned = true,
+                Name = "COPY AS A SHARE CODE",
+                Detail = "A line of text with this whole loadout, to paste in a chat or on a forum. Anyone with Ship Customizer brings it in with LOAD LOADOUT.",
+                Tag = "COPY",
+                OnPick = () => CopyShareCode(hull)
+            });
             OpenPicker("SAVE LOADOUT · " + hull.Name.ToUpperInvariant(),
-                "Keep this CUSTOM loadout on your PC, then bring it back in any later match with LOAD LOADOUT (on a " + hull.Name + ").",
+                "Keep this CUSTOM loadout on your PC, then bring it back in any later match with LOAD LOADOUT (on a " + hull.Name + "), or share it as a code.",
                 entries, "SAVE");
+        }
+
+        /// <summary>Puts the shown CUSTOM loadout on the clipboard as a share code.</summary>
+        private static void CopyShareCode(HullInfo hull)
+        {
+            string code = ShareCodes.Make(hull.ShipGuid.AsHex(), CustomLoadouts.ConfigToShow(hull));
+            GUIUtility.systemCopyBuffer = code;
+            Toast("Share code copied (" + code.Length + " characters). Paste it anywhere; LOAD LOADOUT > PASTE A SHARE CODE brings it in on a " + hull.Name + ".");
+        }
+
+        /// <summary>
+        /// Brings in the share code on the clipboard (only for this ship type), checked like a change from another player:
+        /// what this ship doesn't have, or doesn't fit, is left out.
+        /// </summary>
+        private static void PasteShareCode(HullInfo hull, bool storageOnly)
+        {
+            if (!CustomLoadouts.CanEdit(hull))
+            {
+                Toast(CustomLoadouts.WhyNotEditable());
+                return;
+            }
+            string hullHex;
+            HullConfig shared;
+            string why;
+            if (!ShareCodes.TryRead(GUIUtility.systemCopyBuffer, out hullHex, out shared, out why))
+            {
+                Toast("Nothing was loaded: " + why + ".");
+                return;
+            }
+            if (hullHex != hull.ShipGuid.AsHex())
+            {
+                HullInfo other;
+                Toast("That share code is for " + (Catalog.TryGetHull(new GUIDUnion(hullHex), out other) ? "the " + other.Name : "another ship") + ": pick that ship first.");
+                return;
+            }
+            HullConfig clean = CustomLoadouts.Sanitize(hull, shared);
+            Edit(hull, c => CopyInto(c, clean.Clone(), storageOnly, "a share code"));
+            Toast(storageOnly ? "Loaded the storage racks of the share code." : "Loaded the share code: " + CustomLoadouts.Summary(clean) + ".");
         }
 
         /// <summary>The saved slot (and what for) that waits for a second click, and since when.</summary>
@@ -1150,7 +1196,17 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         private static void OpenLoadPicker(HullInfo hull, bool storageOnly)
         {
-            var entries = new List<PickerPanel.Entry>();
+            var entries = new List<PickerPanel.Entry>
+            {
+                new PickerPanel.Entry
+                {
+                    Pinned = true,
+                    Name = "PASTE A SHARE CODE",
+                    Detail = storageOnly ? "The storage racks of a share code you copied." : "A loadout someone shared: copy their code, then pick this. Only what fits this ship comes in.",
+                    Tag = "PASTE",
+                    OnPick = () => PasteShareCode(hull, storageOnly)
+                }
+            };
             if (CustomLoadouts.TerminalShip == 2)
             {
                 bool following = CustomLoadouts.Ship2FollowsShip1(hull);

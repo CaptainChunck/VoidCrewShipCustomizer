@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.8.0
+
+- **Several players can change the same ship at once.**
+  - Changes are made part by part: each hardpoint, each storage rack slot, the homunculus, the alloys and the
+    fabricator level. Changes to different parts all stay.
+  - When two players change the same part at the same moment, the first change stays and the other player is told who
+    got there first, instead of one change silently replacing the other.
+  - A pick from a list whose part changed while the list was open isn't made either, and everyone sees who changed the
+    loadout.
+  - Players on 0.7 and older can still play with a 0.8.0 host; their changes work as before.
+- **CONTENTS** for any fitted weapon or module: choose what it starts loaded with.
+  - Ammo crates or batteries for a weapon (whatever its type takes), weapon mods, power cells for shields and charge
+    stations, and payloads for the payload launcher.
+  - Only what fits each slot is listed. USUAL CONTENTS keeps what the game's loadouts load it with.
+- **Power check**: every weapon and module shows the power it draws (generators: what they make). The HARDPOINTS list,
+  the hardpoint lists and the CUSTOM description show the ship's total: "Power: 18 of 24 made".
+- **Share codes**: COPY AS A SHARE CODE (in SAVE LOADOUT) puts the whole loadout on the clipboard as one line of text.
+  PASTE A SHARE CODE (in LOAD LOADOUT, and LOAD RACKS) brings one in; only what fits the ship comes in.
+- **Progression in CUSTOM runs, as the modding rules ask:**
+  - Tracked stats, Steam stats and daily and weekly quests are now paused too. Before, a daily quest could be marked
+    done in a CUSTOM run and its reward lost.
+  - The pause holds when the host leaves mid-run, and the new host remembers the run as a CUSTOM run.
+  - A saved CUSTOM run only starts once everyone in the room has the mod.
+  - The pause ends when you leave the room, not only back in the hub.
+- **Fixes:**
+  - With Void Crew Fleet:
+    - each ship's fabricator starts at its own level, whichever team the host is on;
+    - a ship 2 left on "as ship 1" gets ship 1's level;
+    - the host's changes to ship 1 no longer reach RED's ship 2.
+  - Some MK III weapons no longer start with weapon mods copied from the game's test loadouts. Usual contents come only
+    from the loadouts the terminal lists, and never include mods.
+  - Changes from other players (and share codes) are checked part by part: only real modules that fit, real items, a
+    real homunculus, and this PC's settings (AnyItemOnAnyRack, AllowAnySize).
+  - The save files are written in one step (a crash can't lose them), and a file that can't be read is never
+    overwritten. Damaged loadout data no longer causes errors.
+  - SELECT no longer shows SELECTED when CUSTOM was refused.
+  - "CUSTOM was switched off" messages go to every modded player's chat.
+  - Rare errors can no longer start a CUSTOM ship with progression on, or block the hub.
+- **Menus:**
+  - FABRICATOR has 250 alloys, and always lists the current amount and a Fleet Battle's limit.
+  - HARDPOINTS is numbered and comes back after each pick.
+  - Players who can only look at a ship get read-only lists, and the storage window follows team changes while open.
+  - Replacing or clearing a saved slot asks for a second click.
+  - MATCH RULES rows go straight to the problem.
+  - The pop-up lists reuse their rows, so opening many of them no longer builds up memory until you leave the hub.
+- The game-data report lists each weapon's and module's power, item slots and usual contents, and each ship's own power.
+
 ## 0.7.1
 
 - Long item names on the storage-rack tiles are readable again. They get smaller text and show from their first line,

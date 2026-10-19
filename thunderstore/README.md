@@ -12,15 +12,19 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
 2. Choose **CUSTOM** at the bottom of the LOADOUTS list. It starts as a copy of ROOKIE.
 3. Change the ship:
    - **Click a hardpoint** on the ship picture (a **+** marks a free one) to get every weapon and module that fits it,
-     with rarity colours and the game's tooltips. A 2x1 hardpoint takes one 2x1 module or two 1x1 modules.
-   - **HARDPOINTS** lists every hardpoint as a big row (port or starboard, bow to aft), handy in VR.
+     with rarity colours, the game's tooltips and the power each one draws. A 2x1 hardpoint takes one 2x1 module or two
+     1x1 modules. The lists show the ship's power: what everything fitted draws against what the ship makes.
+   - **CONTENTS** (on a fitted weapon or module) picks what it starts loaded with: ammo or batteries for a weapon (what
+     its type takes), weapon mods, power cells for shields and charge stations, payloads for the payload launcher.
+   - **HARDPOINTS** lists every hardpoint as a big, numbered row (port or starboard, bow to aft), handy in VR.
    - **STORAGE** opens every storage rack: click a slot to put any item there (ammo, power cells, repair plates,
      materials, animus crates, weapon crates, mods or relics).
    - **HOMUNCULUS** picks the standard homunculus or any Blessed Homunculus, each with what its blessing does.
    - **FABRICATOR** sets how many alloys the run starts with, and the fabricator's level (MK I to MK III).
-   - **SAVE LOADOUT** keeps the loadout on your PC (10 slots per ship) to bring back in any later match.
-   - **LOAD LOADOUT** brings back a saved loadout, starts from any of the game's loadouts (challenge ones included), or
-     empties the hardpoints, the racks, or everything.
+   - **SAVE LOADOUT** keeps the loadout on your PC (10 slots per ship) to bring back in any later match, or copies it
+     as a **share code**: one line of text to paste in a chat.
+   - **LOAD LOADOUT** brings back a saved loadout or a share code someone sent you, starts from any of the game's
+     loadouts (challenge ones included), or empties the hardpoints, the racks, or everything.
 4. Press **SELECT** and start a mission as usual.
 
 Your CUSTOM loadouts are saved per ship and kept between sessions.
@@ -34,10 +38,14 @@ Ship Customizer follows Void Crew's official modding guidelines for sandbox mods
   kicked.
 - Rooms you host are marked **[mod_session]** in the server list. Players need "Can join [mod_session] games" turned on to
   join them.
-- **A CUSTOM run gives nobody XP, rewards, quest progress or achievements**, and the room is closed to new players until
-  the CUSTOM mission is over. A saved CUSTOM run stays without progression when you continue it.
+- **A CUSTOM run gives nobody XP, rewards, quest progress, achievements, stats or daily and weekly quest progress**, and
+  the room is closed to new players until the CUSTOM mission is over. A saved CUSTOM run stays without progression when
+  you continue it.
 - The CUSTOM loadouts are the host's: everyone sees and changes them, and the changes are saved on the host's PC. With a
   host on 0.4.0 or older, only the host can.
+- **Several players can change the same ship at once**: changes to different hardpoints, rack slots and settings all
+  stay, and when two players change the same thing at the same moment, the first change stays and the other player is
+  told who got there first. Nobody's change is silently replaced.
 - During a CUSTOM run the storage racks take any item.
 
 ## Works with Void Crew Fleet

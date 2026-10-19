@@ -24,8 +24,15 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
   sorted into WEAPONS, DEFENSE and SUPPORT tabs.
   - A 2x1 hardpoint takes one 2x1 module, or two 1x1 modules side by side, as in the game.
   - The game's "only one of these per ship" rule still applies (marked ONE PER SHIP).
+  - Each choice shows the power it draws (or, for a generator, makes), and the lists show the ship's total: **Power: 18
+    of 24 made** (the game's base values).
+  - **CONTENTS** (on a fitted weapon or module): what it starts loaded with. Pick an item for each of its slots (ammo
+    crates or batteries for a weapon, as its type takes, weapon mods, power cells for shields and charge stations,
+    payloads for the payload launcher); only what fits a slot is listed. USUAL CONTENTS keeps what the game's own
+    loadouts load it with.
 - **A CUSTOM section above SELECT** while CUSTOM is shown, in the terminal's own style:
-  - **HARDPOINTS**: every hardpoint as a big row (port or starboard, bow to aft, with what is fitted). Easy to use in VR.
+  - **HARDPOINTS**: every hardpoint as a big, numbered row (port or starboard, bow to aft, with what is fitted and what it
+    is loaded with). After a pick it comes back where it was. Easy to use in VR.
   - **STORAGE**: every storage rack and slot. Any item fits any slot: ammo, power cells, repair plates, materials, animus
     crates, weapon crates (an inscribed crate that builds that weapon on any free hardpoint), weapon mods or relics.
     During a CUSTOM run the racks take any item too.
@@ -34,9 +41,11 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
   - **FABRICATOR**: how many alloys the run starts with (the game's own amount, or 0 to 10,000), and the fabricator's
     level, MK I to MK III.
   - **SAVE LOADOUT**: keep this CUSTOM loadout on your PC, in one of 10 slots per ship, to bring back in any later
-    match. Works on a loadout you can only look at, too.
-  - **LOAD LOADOUT**: replace the CUSTOM loadout with one you saved, any of the game's loadouts (the challenge ones
-    included), or an empty ship (all hardpoints, all racks, or everything), then change what you like.
+    match (replacing or clearing a slot asks for a second click). Works on a loadout you can only look at, too.
+    **COPY AS A SHARE CODE** puts the whole loadout on the clipboard as one line of text, to paste in a chat.
+  - **LOAD LOADOUT**: replace the CUSTOM loadout with one you saved, a **share code** someone sent you (PASTE A SHARE
+    CODE), any of the game's loadouts (the challenge ones included), or an empty ship (all hardpoints, all racks, or
+    everything), then change what you like.
 - **Pop-up windows like the game's own**: the pickers and the storage-rack window are built from the game's pop-up and
   list styles (its dark-grey window with the light-blue outline, list rows and buttons).
 - **Works with [Void Crew Fleet](https://thunderstore.io/c/void-crew/)**: Fleet's second ship can use CUSTOM too, with
@@ -71,12 +80,17 @@ Ship Customizer follows Void Crew's
   kicked).
 - Rooms you host are marked **[mod_session]** in the server list, the game's tag for mods that change the session.
   Players need "Can join [mod_session] games" turned on to join them.
-- **A CUSTOM run gives nobody XP, rewards, quest progress or achievements**, from the moment the mission starts until
-  everyone is back in the hub. The room is closed to new players during a CUSTOM mission. A saved CUSTOM run stays
-  without progression when you continue it, and can only be continued while everyone has the mod.
+- **A CUSTOM run gives nobody XP, rewards, quest progress, achievements, stats or daily and weekly quest progress**, from
+  the moment the mission starts until everyone is back in the hub (also after the host leaves mid-run). The room is
+  closed to new players during a CUSTOM mission. A saved CUSTOM run stays without progression when you continue it, and
+  only starts while everyone in the room has the mod.
 - The CUSTOM loadouts are the host's. Everyone sees and changes the host's, and the changes are saved on the host's PC.
-  LOAD LOADOUT has your saved loadouts and **YOUR OWN CUSTOM**, to bring in what's on your PC. If two players change the same loadout at
-  the same moment, the later change wins.
+  LOAD LOADOUT has your saved loadouts and **YOUR OWN CUSTOM**, to bring in what's on your PC.
+- **Several players can change the same ship at once.** Changes are made part by part (each hardpoint, each rack slot,
+  the homunculus, the alloys, the fabricator level), so changes to different parts all stay. If two players change the
+  same part at the same moment, the first change stays and the other player is told who got there first, so nobody's
+  change is silently replaced. A pick from a list whose part changed while the list was open isn't made either. Everyone
+  is told who changed the loadout.
 - With a host on Ship Customizer 0.4.0 or older, only the host can choose or change CUSTOM; everyone else sees it.
 
 ## Manual install
@@ -147,7 +161,18 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
 - Shared editing (0.5.0): once a 0.5.0 player is in the room, the host shares each ship's CUSTOM loadout as the room
   properties `SC_Layout1_<ship GUID>` and `SC_Layout2_<ship GUID>` (ship 2's only when it has its own). Other players
   send a change as the player property `SC_Edit1_<ship GUID>` / `SC_Edit2_<ship GUID>`: the whole loadout, addressed to
-  the room and the host. The host keeps only what the ship has, saves it and shares it again.
+  the room and the host. The host keeps only what the ship has and what its settings allow (`Sanitize`), saves it and
+  shares it again.
+- Merged changes (0.8.0, protocol 3, `LayoutMerge`): a change also carries `Base`, the host's loadout as the player last
+  read it. The host merges it part by part (each hardpoint group with its module's contents, each rack slot, the
+  homunculus, the alloys, the fabricator level): a part the player changed is taken unless someone else changed it since
+  `Base`, in which case it is refused and the shared layout's `Refused` names it (and who changed it first). Changes
+  without `Base` (0.7.x and older) replace the whole loadout, as before.
+- Module contents (0.8.0): chosen contents are kept per hardpoint (`HullConfig.Contents`). The CUSTOM ship spawns with
+  those modules empty, and the host puts the items in once the ship is in the world, into the module's real
+  `CarryablesSockets`, each only where that socket accepts it.
+- Share codes (0.8.0, `ShareCodes`): `SC1-` and the loadout's JSON, deflated and in URL-safe base64. Pasting one runs it
+  through `Sanitize` like a change from another player.
 - Starting alloys go through `GameSession.InitialAlloys`. The fabricator's level is set with
   `FabricatorModule.SetFabricatorTier` once the ship is in the world, as the game does when continuing a saved run.
 - During a CUSTOM run, a prefix on `CarryablesSocket.DoesAccept` lets storage rack slots take any item. The game checks it
@@ -165,9 +190,11 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
 - When the mission starts (`GSIngame.TransitionTo`), the host swaps the session's `ToLoadShipData` for a `ShipLoadout`
   built from the CUSTOM choices, and the game's own `ShipLoadout.InitializeShip` spawns it for everyone. Anything the game
   could not spawn is left out with a warning instead of stopping the mission from starting.
-- Progression is paused by skipping `PlayerRewardsCollection.AddItem`, achievements and quest progress during CUSTOM
-  runs. Every Harmony patch is looked up by name and applied on its own, so a game update turns CUSTOM off instead of
-  breaking the game.
+- Progression is paused by skipping `PlayerRewardsCollection.AddItem`, achievements, quest progress, tracked stats
+  (`TrackedMetric`, every `SubmitProgress`) and daily and weekly quests (`Metaquest`) during CUSTOM runs. The room
+  property `SC_RunId` holds the CUSTOM run's session id, so a player who becomes host mid-run keeps it paused and
+  remembers the run, and a flag left behind never pauses a later mission. Every Harmony patch is looked up by name and
+  applied on its own, so a game update turns CUSTOM off instead of breaking the game.
 
 ### Public API for other mods
 

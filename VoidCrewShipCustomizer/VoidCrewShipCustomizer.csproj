@@ -97,6 +97,10 @@
       <HintPath>$(GameManaged)\UnityEngine.TextRenderingModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(GameManaged)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Catalog.cs" />
@@ -120,6 +124,7 @@
     <Compile Include="SafeFile.cs" />
     <Compile Include="SavedLoadouts.cs" />
     <Compile Include="Settings.cs" />
+    <Compile Include="ShareCodes.cs" />
     <Compile Include="ShipCustomizerApi.cs" />
     <Compile Include="StoragePanel.cs" />
     <Compile Include="TerminalUi.cs" />

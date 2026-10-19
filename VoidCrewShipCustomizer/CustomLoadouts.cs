@@ -533,54 +533,92 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         public static HullConfig Sanitize(HullInfo hull, HullConfig config)
         {
-            var clean = new HullConfig
+            return CheckCodes(hull, Shape(hull, config));
+        }
+
+        /// <summary>
+        /// The first half of <see cref="Sanitize"/>, which needs nothing from the game: only hardpoint positions and racks
+        /// the ship has (no more items than a rack has slots, contents only where a module is), codes of a sane length, and
+        /// the numbers in range.
+        /// </summary>
+        internal static HullConfig Shape(HullInfo hull, HullConfig config)
+        {
+            var shaped = new HullConfig
             {
                 CopiedFrom = config.CopiedFrom != null && config.CopiedFrom.Length <= 100 ? config.CopiedFrom : "",
+                Homunculus = Code(config.Homunculus),
                 Alloys = config.Alloys,
                 FabricatorLevel = config.FabricatorLevel
             };
-            clean.Normalized();
-            string homunculus = Code(config.Homunculus);
-            if (homunculus.Length > 0 && Catalog.IsHomunculus(homunculus)) clean.Homunculus = homunculus;
-
             if (config.Slots != null)
             {
-                var singles = new HashSet<Type>();
-                foreach (KeyValuePair<int, string> slot in config.Slots.OrderBy(s => s.Key))
+                foreach (KeyValuePair<int, string> slot in config.Slots)
                 {
-                    Option option;
-                    if (slot.Key < 0 || slot.Key >= hull.Sockets.Count || !Catalog.TryGetHardpointOption(Code(slot.Value), out option)) continue;
-                    SocketInfo socket = hull.Sockets[slot.Key];
-                    if (!Settings.AllowAnySize.Value && option.Size != socket.Size) continue;
-                    if (socket.Overlaps.Any(clean.Slots.ContainsKey)) continue;
-                    if (option.SingleInstance && option.ModuleType != null && !singles.Add(option.ModuleType)) continue;
-                    clean.Slots[slot.Key] = option.Code;
+                    if (slot.Key >= 0 && slot.Key < hull.Sockets.Count && Code(slot.Value).Length > 0) shaped.Slots[slot.Key] = slot.Value;
                 }
             }
-
             if (config.Storage != null)
             {
                 foreach (ShelfInfo shelf in hull.Shelves)
                 {
                     List<string> codes;
-                    if (!config.Storage.TryGetValue(shelf.CoreIndex, out codes) || codes == null) continue;
-                    clean.Storage[shelf.CoreIndex] = codes.Take(shelf.Slots.Count).Select(code => RackCode(shelf, Code(code))).ToList();
+                    if (config.Storage.TryGetValue(shelf.CoreIndex, out codes) && codes != null) shaped.Storage[shelf.CoreIndex] = codes.Take(shelf.Slots.Count).Select(Code).ToList();
                 }
             }
-
             if (config.Contents != null)
             {
                 foreach (KeyValuePair<int, List<string>> inside in config.Contents)
                 {
-                    string code;
-                    Option module;
-                    if (inside.Value == null || !clean.Slots.TryGetValue(inside.Key, out code) || !Catalog.TryGetHardpointOption(code, out module)) continue;
-                    List<ContentSlot> slots = Catalog.ContentSlotsOf(module);
-                    if (slots.Count == 0) continue;
-                    clean.Contents[inside.Key] = inside.Value.Take(slots.Count).Select((c, j) => ContentCode(slots[j], Code(c))).ToList();
+                    if (inside.Value != null && shaped.Slots.ContainsKey(inside.Key)) shaped.Contents[inside.Key] = inside.Value.Take(MaxContentSlots).Select(Code).ToList();
                 }
             }
-            return clean;
+            return shaped.Normalized();
+        }
+
+        /// <summary>More item slots than any module has.</summary>
+        private const int MaxContentSlots = 16;
+
+        /// <summary>
+        /// The second half of <see cref="Sanitize"/>, against the game's catalog: known modules and weapons that fit their
+        /// hardpoint (any size with AllowAnySize), never two that overlap, one of each one-per-ship module, things that can
+        /// lie on a rack (on any rack with AnyItemOnAnyRack, otherwise only where the rack takes them), a homunculus that is
+        /// one, and contents each module slot takes.
+        /// </summary>
+        private static HullConfig CheckCodes(HullInfo hull, HullConfig shaped)
+        {
+            var clean = new HullConfig
+            {
+                CopiedFrom = shaped.CopiedFrom,
+                Homunculus = shaped.Homunculus.Length > 0 && Catalog.IsHomunculus(shaped.Homunculus) ? shaped.Homunculus : "",
+                Alloys = shaped.Alloys,
+                FabricatorLevel = shaped.FabricatorLevel
+            };
+            var singles = new HashSet<Type>();
+            foreach (KeyValuePair<int, string> slot in shaped.Slots)
+            {
+                Option option;
+                if (!Catalog.TryGetHardpointOption(slot.Value, out option)) continue;
+                SocketInfo socket = hull.Sockets[slot.Key];
+                if (!Settings.AllowAnySize.Value && option.Size != socket.Size) continue;
+                if (socket.Overlaps.Any(clean.Slots.ContainsKey)) continue;
+                if (option.SingleInstance && option.ModuleType != null && !singles.Add(option.ModuleType)) continue;
+                clean.Slots[slot.Key] = option.Code;
+            }
+            foreach (ShelfInfo shelf in hull.Shelves)
+            {
+                List<string> codes;
+                if (shaped.Storage.TryGetValue(shelf.CoreIndex, out codes)) clean.Storage[shelf.CoreIndex] = codes.Select(code => RackCode(shelf, code)).ToList();
+            }
+            foreach (KeyValuePair<int, List<string>> inside in shaped.Contents)
+            {
+                string code;
+                Option module;
+                if (!clean.Slots.TryGetValue(inside.Key, out code) || !Catalog.TryGetHardpointOption(code, out module)) continue;
+                List<ContentSlot> slots = Catalog.ContentSlotsOf(module);
+                if (slots.Count == 0) continue;
+                clean.Contents[inside.Key] = inside.Value.Take(slots.Count).Select((c, j) => ContentCode(slots[j], c)).ToList();
+            }
+            return clean.Normalized();
         }
 
         /// <summary>A module slot's code if it names an item that slot takes, otherwise "" (empty).</summary>
