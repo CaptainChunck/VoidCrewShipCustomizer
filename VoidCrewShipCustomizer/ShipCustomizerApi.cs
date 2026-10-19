@@ -154,7 +154,8 @@ namespace VoidCrewShipCustomizer
         ///   GUID in lower-case hex. Each code is listed once. Banning a weapon ("w:") bans its weapon crate too.
         /// - category: what FleetApi.IsCategoryAllowed is asked, one of WEAPONS, DEFENSE, SUPPORT MODULES, AMMO &amp; POWER,
         ///   SUPPORT ITEMS, MATERIALS, ANIMUS CRATES, WEAPON CRATES, WEAPON MODS, SPECIAL, OTHER, HOMUNCULUS (in that order).
-        /// - tier: 1 to 3 (MK I to MK III, or Common to Epic), or 0 for none, which no tier rule refuses.
+        /// - tier: 1 to 3 (MK I to MK III, or Common, Rare, and Epic or Legendary), or 0 for none (Special items, no
+        ///   rarity), which no tier rule refuses.
         /// - name: plain text; a Blessed Homunculus's has its blessing after a colon.
         /// What a Fleet Battle never allows isn't listed (relics, the Armory Exchange Key, extra Fabricator modules,
         /// Placeholder weapons). Empty until the hub has loaded. Added in 0.7.0, ApiVersion still 1.

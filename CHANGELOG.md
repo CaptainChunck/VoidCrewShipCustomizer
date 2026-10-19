@@ -9,7 +9,8 @@
     the game's unfinished Placeholder weapons (nor their crates, nor the Placeholder weapon mod). The menus leave them
     out, and the storage list has no RELICS tab. Relics found during the match are yours to use.
   - With Void Crew Fleet 0.3.0 or newer, the host sets the rest on Fleet's SHIP RULES tab:
-    - which tiers, categories and single items CUSTOM may use (banning a weapon bans its weapon crate too);
+    - which tiers, categories and single items CUSTOM may use. Tiers are MK I to MK III; items go by rarity, and
+      Legendary ones count as the top tier. Banning a weapon bans its weapon crate too;
     - the fabricator's highest level (MK I is always allowed);
     - the most starting alloys.
 

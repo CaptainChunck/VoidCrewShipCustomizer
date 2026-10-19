@@ -119,8 +119,9 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>
         /// 1 to 3, the tier a match's rules allow or refuse: the MK I to MK III in the name (every weapon and module has
-        /// one), otherwise the rarity (Common 1, Rare 2, Epic 3), otherwise 0 (Legendary, Special, no rarity), which no
-        /// tier rule refuses. A weapon crate has its weapon's name and rarity, so its weapon's tier.
+        /// one), otherwise the rarity (Common 1, Rare 2, Epic and Legendary 3: the strongest weapon mods are Legendary,
+        /// so a "MK I only" match leaves them out too), otherwise 0 (Special, no rarity), which no tier rule refuses. A
+        /// weapon crate has its weapon's name and rarity, so its weapon's tier.
         /// </summary>
         public static int TierOf(Option option)
         {
@@ -130,7 +131,8 @@ namespace VoidCrewShipCustomizer
             {
                 case RarityType.Common: return 1;
                 case RarityType.Rare: return 2;
-                case RarityType.Epic: return 3;
+                case RarityType.Epic:
+                case RarityType.Legendary: return 3;
                 default: return 0;
             }
         }
@@ -141,7 +143,7 @@ namespace VoidCrewShipCustomizer
             {
                 case 1: return "MK I, Common";
                 case 2: return "MK II, Rare";
-                case 3: return "MK III, Epic";
+                case 3: return "MK III, Epic, Legendary";
                 default: return "none";
             }
         }

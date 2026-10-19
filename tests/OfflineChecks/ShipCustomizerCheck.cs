@@ -512,8 +512,12 @@ internal static class Program
         object relicShrine = option("i:59d0f5d46d3660b4a984ec03824d38a4", "Item", "Relic Shrine", "Epic", "ANIMUS CRATES");
         Check((int)tierOf.Invoke(null, new[] { arcShield3 }) == 3 && (int)tierOf.Invoke(null, new[] { lance2 }) == 2 && (int)tierOf.Invoke(null, new[] { point1 }) == 1,
             "the MK in a name gives the tier (MkIII 3, MkII 2, MkI 1), tags and all");
-        Check((int)tierOf.Invoke(null, new[] { crate }) == 2 && (int)tierOf.Invoke(null, new[] { relic }) == 0 && (int)tierOf.Invoke(null, new[] { placeholder }) == 0,
-            "without a MK the rarity gives it (Rare 2); Legendary and no rarity are tier 0");
+        object highDamage = option("i:c85737fb51b82aa499eb24304bcc0ffd", "Item", "High Damage", "Legendary", "WEAPON MODS");
+        object oxygen = option("i:6c37b5363f7ef7844881a301dca76572", "Item", "Oxygen Tank", "Special", "SUPPORT ITEMS");
+        Check((int)tierOf.Invoke(null, new[] { crate }) == 2 && (int)tierOf.Invoke(null, new[] { highDamage }) == 3,
+            "without a MK the rarity gives it: Rare 2, and Legendary counts as the top tier, 3 (a MK I only match leaves out High Damage)");
+        Check((int)tierOf.Invoke(null, new[] { oxygen }) == 0 && (int)tierOf.Invoke(null, new[] { placeholder }) == 0,
+            "Special items and no rarity are tier 0, which no tier rule refuses");
         Check(new[] { relic, placeholder, placeholderCrate, newPlaceholder, fabricator, armoryKey }.All(o => alwaysBanned.Invoke(null, new[] { o }) != null),
             "never in a Fleet Battle: relics, Placeholder weapons and their crates (by id or name), the Fabricator modules, the Armory Exchange Key");
         Check(new[] { arcShield3, lance2, point1, crate, relicShrine }.All(o => alwaysBanned.Invoke(null, new[] { o }) == null),
