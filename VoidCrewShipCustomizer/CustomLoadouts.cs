@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using CG;
 using CG.Game;
+using CG.Game.SpaceObjects.Controllers;
 using CG.Network;
 using CG.Objects;
 using CG.Ship.Hull;
@@ -72,9 +73,6 @@ namespace VoidCrewShipCustomizer
         /// <summary>Host: the mission now starting continues a saved run.</summary>
         private static bool _missionIsSavedRun;
 
-        /// <summary>Host: the fabricator level ship 1 and ship 2 still have to start at (0: nothing to do).</summary>
-        private static readonly int[] PendingFabricatorLevels = new int[2];
-        private static float _shipSeenAt = -1f;
 
         /// <summary>
         /// For players other than a host that shares them (protocol 2): the host's CUSTOM loadouts by ship type, for
@@ -82,7 +80,19 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         private static readonly Dictionary<GUIDUnion, HullConfig> HostLayouts = new Dictionary<GUIDUnion, HullConfig>();
         private static readonly Dictionary<GUIDUnion, HullConfig> HostLayouts2 = new Dictionary<GUIDUnion, HullConfig>();
-        private static readonly Dictionary<int, float> LastChangeToast = new Dictionary<int, float>();
+
+        /// <summary>
+        /// For players other than the host: the host's loadouts exactly as last read from the room (the ones shown can be
+        /// ahead, with this player's own change on its way). A change is sent with what it was made against, from here.
+        /// </summary>
+        private static readonly Dictionary<GUIDUnion, HullConfig> ConfirmedLayouts = new Dictionary<GUIDUnion, HullConfig>();
+        private static readonly Dictionary<GUIDUnion, HullConfig> ConfirmedLayouts2 = new Dictionary<GUIDUnion, HullConfig>();
+
+        /// <summary>Who last changed each part of each loadout ("hull/ship/part"), for the messages when two players collide.</summary>
+        private static readonly Dictionary<string, string> PartEditors = new Dictionary<string, string>();
+        /// <summary>Who last changed each loadout ("hull/ship"), as seen by a player other than the host.</summary>
+        private static readonly Dictionary<string, string> LayoutEditors = new Dictionary<string, string>();
+        private static readonly Dictionary<string, float> LastChangeToast = new Dictionary<string, float>();
 
         public static bool IsActive
         {
@@ -205,11 +215,39 @@ namespace VoidCrewShipCustomizer
             ShipLoadoutContextInfo context = UnityEngine.Object.Instantiate(hull.BasePreset.LoadoutContextInfo);
             context.name = "ShipCustomizer CUSTOM " + hull.Name;
             context.hideFlags = HideFlags.DontUnloadUnusedAsset;
-            string body = "<b>Custom Loadout</b>\n<i>Click a hardpoint on the ship, or use HARDPOINTS, to fit any module or weapon.</i>\n" +
-                          "Missions flown with it are marked modded and earn no XP or rewards.";
             if (HeaderTextField != null) HeaderTextField.SetValue(context, new DefaultableLocalizedString(Header, null));
-            if (BodyTextField != null) BodyTextField.SetValue(context, new DefaultableLocalizedString(body, null));
+            if (BodyTextField != null) BodyTextField.SetValue(context, new DefaultableLocalizedString(Description(hull, ConfigToShow(hull)), null));
             return context;
+        }
+
+        /// <summary>The CUSTOM loadout's text in the terminal's DESCRIPTION: how to change it, its power, and what the run starts with.</summary>
+        private static string Description(HullInfo hull, HullConfig config)
+        {
+            var start = new List<string> { PowerLine(hull, config) };
+            if (config.Alloys >= 0) start.Add(config.Alloys + " alloys");
+            if (config.FabricatorLevel > 0) start.Add("fabricator " + FabricatorLevelName(config.FabricatorLevel));
+            return "<b>Custom Loadout</b>\n<i>Click a hardpoint on the ship, or use HARDPOINTS, to fit any module or weapon.</i>\n" +
+                   string.Join("  ·  ", start.ToArray()) + "\n" +
+                   "Missions flown with it are marked modded and earn no XP or rewards.";
+        }
+
+        /// <summary>
+        /// The power check: what everything fitted draws when it is all on, against what the ship and its generators make
+        /// ("Power: 18 of 24 made"), as the game's base values (blessings, relics and upgrades can change them in a run).
+        /// </summary>
+        public static string PowerLine(HullInfo hull, HullConfig config)
+        {
+            int use = 0;
+            int made = hull.BasePower;
+            foreach (string code in config.Slots.Values)
+            {
+                Option option;
+                if (!Catalog.TryGetOption(code, out option)) continue;
+                use += option.PowerUse;
+                made += option.PowerMade;
+            }
+            string line = "Power: " + use + " of " + made + " made";
+            return use > made ? line + " (not everything can be on at once)" : line;
         }
 
         /// <summary>
@@ -294,6 +332,23 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>Other players: the host's shared loadout as read from the room (null: ship 2 follows ship 1 / none shared).</summary>
+        /// <summary>Other players: the host's loadout exactly as the room has it now (null: none shared / ship 2 follows ship 1).</summary>
+        public static void SetConfirmedLayout(int ship, GUIDUnion hullGuid, HullConfig config)
+        {
+            Dictionary<GUIDUnion, HullConfig> layouts = ship == 2 ? ConfirmedLayouts2 : ConfirmedLayouts;
+            if (config == null) layouts.Remove(hullGuid);
+            else layouts[hullGuid] = Normalize(config.Clone());
+        }
+
+        /// <summary>The host's loadout as last read from the room, which this player's next change is measured against.</summary>
+        private static HullConfig ConfirmedLayout(HullInfo hull, int ship)
+        {
+            HullConfig config;
+            if (ship == 2 && ConfirmedLayouts2.TryGetValue(hull.ShipGuid, out config)) return config;
+            if (ConfirmedLayouts.TryGetValue(hull.ShipGuid, out config)) return config;
+            return HostLayout(hull, ship);
+        }
+
         public static void SetHostLayout(int ship, GUIDUnion hullGuid, HullConfig config)
         {
             Dictionary<GUIDUnion, HullConfig> layouts = ship == 2 ? HostLayouts2 : HostLayouts;
@@ -308,6 +363,9 @@ namespace VoidCrewShipCustomizer
         {
             HostLayouts.Clear();
             HostLayouts2.Clear();
+            ConfirmedLayouts.Clear();
+            ConfirmedLayouts2.Clear();
+            LayoutEditors.Clear();
             RefreshAll();
         }
 
@@ -317,7 +375,8 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         public static bool SendEditToHost(HullInfo hull, int ship, HullConfig config, bool followShip1)
         {
-            if (!RoomSync.SendEdit(hull, ship, config, followShip1)) return false;
+            HullConfig seen = ConfirmedLayout(hull, ship);
+            if (!RoomSync.SendEdit(hull, ship, config, followShip1, seen != null ? seen.Clone() : null)) return false;
             if (followShip1) HostLayouts2.Remove(hull.ShipGuid);
             else (ship == 2 ? HostLayouts2 : HostLayouts)[hull.ShipGuid] = config;
             Refresh(hull);
@@ -341,51 +400,204 @@ namespace VoidCrewShipCustomizer
                 if (edit.Ship != 2) return;
                 LoadoutStore.ForgetShip2(hull);
             }
-            else
+            List<string> refused = null;
+            if (!edit.FollowShip1)
             {
                 if (edit.Config == null) return;
                 if (edit.Ship == 1) KeepShip2Apart(hull);
-                LoadoutStore.Set(hull, Sanitize(hull, edit.Config), edit.Ship);
+                HullConfig wanted = Sanitize(hull, edit.Config);
+                HullConfig current = LoadoutStore.GetForEdit(hull, edit.Ship);
+                var applied = new List<string>();
+                var refusedParts = new List<string>();
+                HullConfig result;
+                if (edit.Base != null)
+                {
+                    // Only this player's own changes, part by part: what someone else changed since they last looked stays.
+                    result = LayoutMerge.Merge(current, Sanitize(hull, edit.Base), wanted, hull.Sockets, RackSlots(hull), applied, refusedParts);
+                }
+                else
+                {
+                    // A player on Ship Customizer 0.7.0 or older sends the whole loadout, which replaces this one.
+                    applied.AddRange(LayoutMerge.Changed(current, wanted, hull.Sockets, RackSlots(hull)));
+                    result = wanted;
+                }
+                refused = refusedParts.Select(p => PartName(hull, p) + " (" + EditorOf(hull, edit.Ship, p) + ")").ToList();
+                if (refusedParts.Count > 0) Log.Info("Kept what others changed first, instead of " + who + "'s change: " + string.Join(", ", refused.ToArray()) + ".");
+                if (applied.Count == 0 && refusedParts.Count == 0 && edit.Base != null)
+                {
+                    // Nothing new (the same change again): only confirm it to the player.
+                    OnEdited(hull, actor, edit.N, edit.Ship, refused);
+                    return;
+                }
+                LoadoutStore.Set(hull, result, edit.Ship);
+                NoteEditors(hull, edit.Ship, applied, who);
             }
-            OnEdited(hull, actor, edit.N);
+            OnEdited(hull, actor, edit.N, edit.Ship, refused);
             TerminalUi.OnLoadoutChangedRemotely();
             string what = (edit.Ship == 2 ? "ship 2's " : "") + "CUSTOM " + hull.Name;
             Log.Info(who + " changed " + what + ".");
-            float last;
-            if (!LastChangeToast.TryGetValue(actor, out last) || Time.unscaledTime - last > 8f)
-            {
-                LastChangeToast[actor] = Time.unscaledTime;
-                TerminalUi.ShowToast(who + " changed " + what + ".");
-            }
+            ToastChange(who, what);
         }
 
-        /// <summary>A loadout from another player, limited to this ship's hardpoints and racks (it is saved on this PC).</summary>
+        /// <summary>
+        /// Host: a player's change that can't be made at all (their team doesn't own the ship). The player is told, and sees
+        /// the loadout as it really is again.
+        /// </summary>
+        public static void RefuseEditAsHost(int actor, RoomSync.RoomEdit edit, string why)
+        {
+            if (edit == null || string.IsNullOrEmpty(edit.Hull)) return;
+            HullInfo hull;
+            var hullGuid = new GUIDUnion(edit.Hull);
+            if (!Catalog.ShipGuids().Contains(hullGuid) || !Catalog.TryGetHull(hullGuid, out hull)) return;
+            RoomSync.PublishLayouts(hull, actor, edit.N, edit.Ship == 2 ? 2 : 1, new List<string> { "your change, because " + why });
+        }
+
+        /// <summary>The number of slots of each storage rack, by core system index.</summary>
+        public static Dictionary<int, int> RackSlots(HullInfo hull)
+        {
+            return hull.Shelves.ToDictionary(s => s.CoreIndex, s => s.Slots.Count);
+        }
+
+        /// <summary>Host: remembers who changed which parts of a loadout, for the messages when two players collide.</summary>
+        private static void NoteEditors(HullInfo hull, int ship, IEnumerable<string> parts, string who)
+        {
+            foreach (string part in parts) PartEditors[hull.ShipGuid.AsHex() + "/" + ship + "/" + part] = who;
+        }
+
+        /// <summary>Host: who last changed a part of a loadout, as far as this session knows.</summary>
+        private static string EditorOf(HullInfo hull, int ship, string part)
+        {
+            string who;
+            return PartEditors.TryGetValue(hull.ShipGuid.AsHex() + "/" + ship + "/" + part, out who) ? who : "someone";
+        }
+
+        /// <summary>The host changed one of its own CUSTOM loadouts: remember which parts, for the messages when players collide.</summary>
+        public static void NoteHostChange(HullInfo hull, int ship, HullConfig before, HullConfig after)
+        {
+            if (before == null || after == null) return;
+            string who = PhotonNetwork.LocalPlayer != null && !string.IsNullOrEmpty(PhotonNetwork.LocalPlayer.NickName) ? PhotonNetwork.LocalPlayer.NickName : "the host";
+            NoteEditors(hull, ship, LayoutMerge.Changed(before, after, hull.Sockets, RackSlots(hull)), who);
+        }
+
+        /// <summary>
+        /// Who last changed a part of the loadout the terminal shows (the host knows per part, other players per loadout),
+        /// for the message when a change is refused because the part changed while a list was open.
+        /// </summary>
+        public static string LastEditorOf(HullInfo hull, string part)
+        {
+            if (PhotonNetwork.IsMasterClient) return EditorOf(hull, TerminalShip, part);
+            string who;
+            return LayoutEditors.TryGetValue(hull.ShipGuid.AsHex() + "/" + TerminalShip, out who) ? who : "someone";
+        }
+
+        /// <summary>Other players: the host shared a change someone else made to one of its loadouts.</summary>
+        public static void OnChangedByOther(string who, int ship, GUIDUnion hullGuid)
+        {
+            LayoutEditors[hullGuid.AsHex() + "/" + ship] = who;
+            HullInfo hull;
+            if (!Catalog.TryGetHull(hullGuid, out hull)) return;
+            ToastChange(who, (ship == 2 ? "ship 2's " : "") + "CUSTOM " + hull.Name);
+        }
+
+        /// <summary>"NAME changed CUSTOM METEM Frigate.", at most every few seconds per player.</summary>
+        private static void ToastChange(string who, string what)
+        {
+            float last;
+            if (LastChangeToast.TryGetValue(who, out last) && Time.unscaledTime - last <= 8f) return;
+            LastChangeToast[who] = Time.unscaledTime;
+            TerminalUi.ShowToast(who + " changed " + what + ".");
+        }
+
+        /// <summary>A part of a loadout in words, for messages: "HARDPOINT 3", "STORAGE RACK 1 slot 4", "the fabricator level".</summary>
+        public static string PartName(HullInfo hull, string part)
+        {
+            if (part == LayoutMerge.Homunculus) return "the homunculus";
+            if (part == LayoutMerge.Alloys) return "the starting alloys";
+            if (part == LayoutMerge.Fabricator) return "the fabricator level";
+            if (part.StartsWith("hp:")) return "HARDPOINT " + (int.Parse(part.Substring(3)) + 1);
+            if (part.StartsWith("rack:"))
+            {
+                string[] bits = part.Split(':');
+                int rack = int.Parse(bits[1]);
+                ShelfInfo shelf = hull.Shelves.FirstOrDefault(s => s.CoreIndex == rack);
+                return (shelf != null ? shelf.Name : "a storage rack") + " slot " + (int.Parse(bits[2]) + 1);
+            }
+            return part;
+        }
+
+        /// <summary>
+        /// A loadout from another player or a share code, cut down to what this ship has and what this PC's settings allow
+        /// (it is saved here): known modules and weapons that fit their hardpoint (any size with AllowAnySize), never two
+        /// that overlap, one of each one-per-ship module, things that can lie on a rack (on any rack with AnyItemOnAnyRack,
+        /// otherwise only where the rack takes them), and a homunculus that is one. Anything else is left out.
+        /// </summary>
         public static HullConfig Sanitize(HullInfo hull, HullConfig config)
         {
             var clean = new HullConfig
             {
-                Homunculus = Code(config.Homunculus),
                 CopiedFrom = config.CopiedFrom != null && config.CopiedFrom.Length <= 100 ? config.CopiedFrom : "",
                 Alloys = config.Alloys,
                 FabricatorLevel = config.FabricatorLevel
             };
             clean.Normalized();
+            string homunculus = Code(config.Homunculus);
+            if (homunculus.Length > 0 && Catalog.IsHomunculus(homunculus)) clean.Homunculus = homunculus;
+
             if (config.Slots != null)
             {
-                foreach (KeyValuePair<int, string> slot in config.Slots)
+                var singles = new HashSet<Type>();
+                foreach (KeyValuePair<int, string> slot in config.Slots.OrderBy(s => s.Key))
                 {
-                    if (slot.Key >= 0 && slot.Key < hull.Sockets.Count && !string.IsNullOrEmpty(Code(slot.Value))) clean.Slots[slot.Key] = slot.Value;
+                    Option option;
+                    if (slot.Key < 0 || slot.Key >= hull.Sockets.Count || !Catalog.TryGetHardpointOption(Code(slot.Value), out option)) continue;
+                    SocketInfo socket = hull.Sockets[slot.Key];
+                    if (!Settings.AllowAnySize.Value && option.Size != socket.Size) continue;
+                    if (socket.Overlaps.Any(clean.Slots.ContainsKey)) continue;
+                    if (option.SingleInstance && option.ModuleType != null && !singles.Add(option.ModuleType)) continue;
+                    clean.Slots[slot.Key] = option.Code;
                 }
             }
+
             if (config.Storage != null)
             {
                 foreach (ShelfInfo shelf in hull.Shelves)
                 {
                     List<string> codes;
-                    if (config.Storage.TryGetValue(shelf.CoreIndex, out codes) && codes != null) clean.Storage[shelf.CoreIndex] = codes.Take(shelf.Slots.Count).Select(Code).ToList();
+                    if (!config.Storage.TryGetValue(shelf.CoreIndex, out codes) || codes == null) continue;
+                    clean.Storage[shelf.CoreIndex] = codes.Take(shelf.Slots.Count).Select(code => RackCode(shelf, Code(code))).ToList();
+                }
+            }
+
+            if (config.Contents != null)
+            {
+                foreach (KeyValuePair<int, List<string>> inside in config.Contents)
+                {
+                    string code;
+                    Option module;
+                    if (inside.Value == null || !clean.Slots.TryGetValue(inside.Key, out code) || !Catalog.TryGetHardpointOption(code, out module)) continue;
+                    List<ContentSlot> slots = Catalog.ContentSlotsOf(module);
+                    if (slots.Count == 0) continue;
+                    clean.Contents[inside.Key] = inside.Value.Take(slots.Count).Select((c, j) => ContentCode(slots[j], Code(c))).ToList();
                 }
             }
             return clean;
+        }
+
+        /// <summary>A module slot's code if it names an item that slot takes, otherwise "" (empty).</summary>
+        private static string ContentCode(ContentSlot slot, string code)
+        {
+            Option item;
+            if (code.Length == 0 || !Catalog.TryGetRackOption(code, out item) || !Catalog.ContentSlotAccepts(slot, item)) return "";
+            return item.Code;
+        }
+
+        /// <summary>A rack slot's code if it names something that can lie there, otherwise "" (an empty slot).</summary>
+        private static string RackCode(ShelfInfo shelf, string code)
+        {
+            Option option;
+            if (code.Length == 0 || !Catalog.TryGetRackOption(code, out option)) return "";
+            if (!Settings.AnyItemOnAnyRack.Value && !Catalog.ShelfAccepts(shelf, option)) return "";
+            return option.Code;
         }
 
         /// <summary>An item or module code as saved ("m:", "w:", "i:" or "c:" and a GUID); anything else becomes empty.</summary>
@@ -429,7 +641,9 @@ namespace VoidCrewShipCustomizer
             if (!ByShip.TryGetValue(hull.ShipGuid, out entry)) return;
             try
             {
-                entry.Data.ShipLoadout = Build(hull, ConfigToShow(hull));
+                HullConfig config = ConfigToShow(hull);
+                entry.Data.ShipLoadout = Build(hull, config);
+                if (BodyTextField != null) BodyTextField.SetValue(entry.Def.LoadoutContextInfo, new DefaultableLocalizedString(Description(hull, config), null));
             }
             catch (Exception e)
             {
@@ -464,12 +678,12 @@ namespace VoidCrewShipCustomizer
                     continue;
                 }
                 Option option;
-                if (!Catalog.TryGetOption(slot.Value, out option) || (option.Kind != OptionKind.Module && option.Kind != OptionKind.Weapon) || !Catalog.CanSpawn(option.PrefabGuid))
+                if (!Catalog.TryGetHardpointOption(slot.Value, out option) || !Catalog.CanSpawn(option.PrefabGuid))
                 {
                     Log.WarnOnce("unknown " + slot.Value, "The CUSTOM " + hull.Name + " has a module the game no longer has (" + slot.Value + "); that hardpoint is left empty.");
                     continue;
                 }
-                ShipSocketEntry entry = SocketEntryFor(option, slot.Key);
+                ShipSocketEntry entry = SocketEntryFor(option, slot.Key, config.Contents != null && config.Contents.ContainsKey(slot.Key));
                 if (entry == null) continue;
                 loadout.Sockets.Add(entry);
                 filled.Add(slot.Key);
@@ -501,18 +715,23 @@ namespace VoidCrewShipCustomizer
 
             loadout.HomunculusOverride = new CarryableRef();
             Option homunculus;
-            if (!string.IsNullOrEmpty(config.Homunculus) && Catalog.TryGetOption(config.Homunculus, out homunculus) && Catalog.CanSpawn(homunculus.Guid))
+            if (!string.IsNullOrEmpty(config.Homunculus) && Catalog.TryGetOption(config.Homunculus, out homunculus) && Catalog.IsCarryable(homunculus.Guid) && Catalog.CanSpawn(homunculus.Guid))
             {
                 loadout.HomunculusOverride = new CarryableRef(homunculus.Guid);
             }
             return loadout;
         }
 
-        private static ShipSocketEntry SocketEntryFor(Option option, int socketIndex)
+        /// <param name="chosenContents">
+        /// The loadout says what this module holds: the game starts it empty, and the host puts the chosen items in once
+        /// the ship has spawned (see FillContents), into the module's real slots, each only where it fits. Otherwise the
+        /// module starts with its usual contents from the game's loadouts.
+        /// </param>
+        private static ShipSocketEntry SocketEntryFor(Option option, int socketIndex, bool chosenContents)
         {
             ShipSocketEntry entry = null;
             JObject template;
-            if (Settings.CopyPresetModuleContents.Value && Catalog.TryGetPresetContents(option.Guid, out template))
+            if (!chosenContents && Settings.CopyPresetModuleContents.Value && Catalog.TryGetPresetContents(option.Guid, out template))
             {
                 try
                 {
@@ -527,8 +746,8 @@ namespace VoidCrewShipCustomizer
             entry.SocketId = socketIndex;
             entry.Module = new GameObjectRef(new ResourceAssetRef(option.PrefabGuid));
             entry.BuildBox = new CarryableRef();
-            if (entry.Upgrades == null) entry.Upgrades = new ShipAssetRef[0];
-            entry.Upgrades = entry.Upgrades.Select(u => u != null && !u.IsNull && Catalog.CanSpawn(u.AssetGuid) && KeepsToMatchRules(u) ? u : new ShipAssetRef()).ToArray();
+            if (entry.Upgrades == null || chosenContents) entry.Upgrades = new ShipAssetRef[0];
+            entry.Upgrades = entry.Upgrades.Select(u => u != null && !u.IsNull && Catalog.CanSpawn(u.AssetGuid) && Catalog.IsDefaultContent(u) && KeepsToMatchRules(u) ? u : new ShipAssetRef()).ToArray();
             if (option.Kind == OptionKind.Weapon)
             {
                 entry.ExtraData = WeaponData(option.Guid);
@@ -551,7 +770,7 @@ namespace VoidCrewShipCustomizer
         {
             if (string.IsNullOrEmpty(code)) return new ShipAssetRef();
             Option option;
-            if (!Catalog.TryGetOption(code, out option))
+            if (!Catalog.TryGetRackOption(code, out option))
             {
                 Log.WarnOnce("unknown " + code, "The CUSTOM " + hull.Name + " has a storage item the game no longer has (" + code + "); that rack slot is left empty.");
                 return new ShipAssetRef();
@@ -619,14 +838,14 @@ namespace VoidCrewShipCustomizer
         /// A CUSTOM loadout was changed and saved on this PC. On the host, tell the other players: the room's chosen
         /// loadouts, and the shared loadouts (<paramref name="by"/> and <paramref name="n"/> name the player's change, 0 for the host's own).
         /// </summary>
-        public static void OnEdited(HullInfo hull, int by = 0, int n = 0)
+        public static void OnEdited(HullInfo hull, int by = 0, int n = 0, int ship = 0, List<string> refused = null)
         {
             Refresh(hull);
             if (!PhotonNetwork.IsMasterClient) return;
             // Both: ship 2's layout follows ship 1's until it has its own.
             if (ActiveShip == hull.ShipGuid) RoomSync.PublishCustom(hull, LoadoutStore.Get(hull));
             if (ActiveShip2 == hull.ShipGuid) RoomSync.PublishCustom2(hull, LoadoutStore.Get(hull, 2));
-            RoomSync.PublishLayouts(hull, by, n);
+            RoomSync.PublishLayouts(hull, by, n, ship, refused);
         }
 
         // ---------------------------------------------------------------- ship 2 (Void Crew Fleet)
@@ -678,21 +897,21 @@ namespace VoidCrewShipCustomizer
             // In a Fleet Battle, without what the match rules don't allow (on a copy: the saved loadout keeps it).
             HullConfig config = MatchRules.ForMission(hull, LoadoutStore.Get(hull, 2), 2);
             ShipLoadout loadout = Build(hull, config);
-            RememberRacks(hull, loadout);
-            // Continuing a saved run, the game puts the fabricators back as they were.
-            if (!_missionIsSavedRun) PendingFabricatorLevels[1] = config.FabricatorLevel;
+            // Progression is paused and the room closed before the CUSTOM ship goes to the game. This only ever raises the
+            // pause; ship 1's check at mission start keeps it raised (see OnMissionStarting).
             _ship2CustomRun = true;
-            // Only ever raises the pause; ship 1's check at mission start keeps it raised (see OnMissionStarting).
             ProgressionGuard.SetHostRun(true);
             ModdingUtils.RegisterSessionMod();
             RoomSync.CloseForCustomMission();
+            RememberShip(hull, loadout, config, "Ship 2");
             Log.Info("Ship 2 starts with your ship 2 CUSTOM " + hull.Name + ": " + Describe(config) + ".");
             return loadout;
         }
 
         /// <summary>
         /// Called just before the game leaves the hub for a mission. On the host, swaps in the CUSTOM ship when the room
-        /// chose one, and decides whether this run pauses progression.
+        /// chose one, and decides whether this run pauses progression. Progression is paused (and the room closed) before
+        /// the CUSTOM ship is handed to the game, so nothing that goes wrong later can start a CUSTOM ship with progression on.
         /// </summary>
         public static void OnMissionStarting(GameSession session, PreservedGameSession preserved)
         {
@@ -700,39 +919,39 @@ namespace VoidCrewShipCustomizer
             _missionIsSavedRun = preserved != null;
 
             bool custom = false;
+            HullInfo hull = null;
+            HullConfig config = null;
+            ShipLoadout built = null;
             if (preserved != null)
             {
                 // Continuing a saved run: it is a CUSTOM run if it was started as one.
                 custom = LoadoutStore.WasCustomRun(preserved.GameSessionID);
-                if (custom) Log.Info("Continuing a saved run that was started with a CUSTOM loadout; progression stays paused.");
-            }
-            else if (IsActive && session.ToLoadShipData != null)
-            {
-                HullInfo hull;
-                if (Catalog.TryGetHull(ActiveShip, out hull) && hull.BasePreset != null && session.ToLoadShipGuid == hull.BasePreset.AssetGuid)
+                if (custom)
                 {
-                    List<string> missing = RoomSync.PlayersWithoutMod(false);
-                    if (missing.Count > 0)
-                    {
-                        Notice.Show("This mission starts with " + LoadoutStore.PresetName(hull.BasePreset) + " instead of CUSTOM: " + string.Join(", ", missing.ToArray()) +
-                                    " doesn't have Ship Customizer, and nobody may earn progression in a CUSTOM run.");
-                    }
-                    else if (!EnsureRoomMarkedModded())
-                    {
-                        Notice.Show("This mission starts with " + LoadoutStore.PresetName(hull.BasePreset) + " instead of CUSTOM: the room is not marked [mod_session] yet.");
-                    }
-                    else
-                    {
-                        // In a Fleet Battle, without what the match rules don't allow (on a copy: the saved loadout keeps it).
-                        HullConfig config = MatchRules.ForMission(hull, LoadoutStore.Get(hull), 1);
-                        session.ToLoadShipData = Build(hull, config);
-                        RememberRacks(hull, session.ToLoadShipData);
-                        // The game's own starting amount for the run (-1 means its usual bonus from the players' ranks).
-                        if (config.Alloys >= 0) session.InitialAlloys = config.Alloys;
-                        PendingFabricatorLevels[0] = config.FabricatorLevel;
-                        custom = true;
-                        Log.Info("Starting the mission with your CUSTOM " + hull.Name + ": " + Describe(config) + ".");
-                    }
+                    LoadoutStore.RememberCustomRun(preserved.GameSessionID);
+                    Log.Info("Continuing a saved run that was started with a CUSTOM loadout; progression stays paused.");
+                }
+            }
+            else if (IsActive && session.ToLoadShipData != null && Catalog.TryGetHull(ActiveShip, out hull) && hull.BasePreset != null &&
+                     session.ToLoadShipGuid == hull.BasePreset.AssetGuid)
+            {
+                List<string> missing = RoomSync.PlayersWithoutMod(false);
+                if (missing.Count > 0)
+                {
+                    Notice.Show("This mission starts with " + LoadoutStore.PresetName(hull.BasePreset) + " instead of CUSTOM: " + string.Join(", ", missing.ToArray()) +
+                                " doesn't have Ship Customizer, and nobody may earn progression in a CUSTOM run.");
+                }
+                else if (!EnsureRoomMarkedModded())
+                {
+                    Notice.Show("This mission starts with " + LoadoutStore.PresetName(hull.BasePreset) + " instead of CUSTOM: the room is not marked [mod_session] yet.");
+                }
+                else
+                {
+                    // In a Fleet Battle, without what the match rules don't allow (on a copy: the saved loadout keeps it).
+                    // If building fails, nothing has changed yet and the stand-in starts.
+                    config = MatchRules.ForMission(hull, LoadoutStore.Get(hull), 1);
+                    built = Build(hull, config);
+                    custom = true;
                 }
             }
 
@@ -752,6 +971,13 @@ namespace VoidCrewShipCustomizer
                 ModdingUtils.RegisterSessionMod();
                 RoomSync.CloseForCustomMission();
             }
+            if (built == null) return;
+
+            session.ToLoadShipData = built;
+            // The game's own starting amount for the run (-1 means its usual bonus from the players' ranks).
+            if (config.Alloys >= 0) session.InitialAlloys = config.Alloys;
+            RememberShip(hull, built, config, "The ship");
+            Log.Info("Starting the mission with your CUSTOM " + hull.Name + ": " + Describe(config) + ".");
         }
 
         /// <summary>
@@ -765,48 +991,106 @@ namespace VoidCrewShipCustomizer
             return ModdingUtils.IsCurrentSessionModded();
         }
 
-        // ---------------------------------------------------------------- the storage racks, checked after spawning
+        // ---------------------------------------------------------------- the ships, checked after spawning
 
-        /// <summary>A CUSTOM ship this mission spawns: which core systems are its racks, and what they hold.</summary>
-        private sealed class RackPlan
+        /// <summary>A CUSTOM ship this mission spawns: its loadout, which core systems are its racks, and its fabricator level.</summary>
+        private sealed class ShipPlan
         {
             public string Hull;
+            public string Which;
+            /// <summary>The loadout handed to the game, and the same as JSON, to recognise a copy of it (Void Crew Fleet's "as ship 1").</summary>
+            public ShipLoadout Loadout;
+            public string Json;
             public HashSet<int> Racks;
-            public string Signature;
+            public int FabricatorLevel;
+            /// <summary>The items chosen for each hardpoint's module, to put in once it has spawned.</summary>
+            public Dictionary<int, List<string>> Contents;
         }
 
-        private static readonly List<RackPlan> RackPlans = new List<RackPlan>();
-
-        /// <summary>Host, at mission start: remembers what a CUSTOM ship's racks hold, to check them once it has spawned.</summary>
-        private static void RememberRacks(HullInfo hull, ShipLoadout loadout)
+        /// <summary>A spawned CUSTOM ship that still needs its fabricator level and its modules' chosen contents.</summary>
+        private sealed class PendingLevel
         {
-            var racks = new HashSet<int>(hull.Shelves.Select(s => s.CoreIndex));
-            RackPlans.Add(new RackPlan { Hull = hull.Name, Racks = racks, Signature = RackSignature(loadout, racks) });
+            public PlayerControlledShip Ship;
+            public int Level;
+            public Dictionary<int, List<string>> Contents;
+            public string Which;
+            public float Since = -1f;
         }
 
-        /// <summary>The racks of a loadout as text ("core index=item,item,-;..."), to recognise it again (also when copied).</summary>
-        private static string RackSignature(ShipLoadout loadout, HashSet<int> racks)
+        private static readonly List<ShipPlan> ShipPlans = new List<ShipPlan>();
+        private static readonly List<PendingLevel> PendingLevels = new List<PendingLevel>();
+
+        /// <summary>Host, at mission start: remembers a CUSTOM ship, to check its racks and set its fabricator once it has spawned.</summary>
+        private static void RememberShip(HullInfo hull, ShipLoadout loadout, HullConfig config, string which)
         {
-            var parts = new List<string>();
-            foreach (ShipSocketEntry rack in loadout.CoreSystemSockets.Where(c => c != null && racks.Contains(c.SocketId)).OrderBy(c => c.SocketId))
+            var built = new HashSet<int>(loadout.Sockets.Where(s => s != null).Select(s => s.SocketId));
+            ShipPlans.Add(new ShipPlan
             {
-                IEnumerable<string> items = (rack.Upgrades ?? new ShipAssetRef[0]).Select(u => u == null || u.IsNull ? "-" : u.AssetRef.AssetGuid.AsHex());
-                parts.Add(rack.SocketId + "=" + string.Join(",", items.ToArray()));
+                Hull = hull.Name,
+                Which = which,
+                Loadout = loadout,
+                Json = JsonOf(loadout),
+                Racks = new HashSet<int>(hull.Shelves.Select(s => s.CoreIndex)),
+                // Continuing a saved run, the game puts the fabricators back as they were.
+                FabricatorLevel = _missionIsSavedRun ? 0 : config.FabricatorLevel,
+                Contents = config.Contents == null
+                    ? new Dictionary<int, List<string>>()
+                    : config.Contents.Where(c => built.Contains(c.Key) && c.Value != null).ToDictionary(c => c.Key, c => c.Value.ToList())
+            });
+        }
+
+        private static string JsonOf(ShipLoadout loadout)
+        {
+            try
+            {
+                return loadout.AsJObject().ToString(Newtonsoft.Json.Formatting.None);
             }
-            return string.Join(";", parts.ToArray());
+            catch (Exception e)
+            {
+                Log.Verbose("Could not read a loadout as JSON: " + e.Message);
+                return null;
+            }
         }
 
         /// <summary>
-        /// Host, right after the game spawned a ship from one of this mission's CUSTOM loadouts (ship 1, ship 2, or Void Crew
-        /// Fleet's copy of ship 1, recognised by its racks): every rack slot must hold what the CUSTOM loadout puts there.
-        /// The game fills racks only from the loadout, but if a slot ends up with something else (or an empty slot with
-        /// anything), that item is replaced by the chosen one and the log says so.
+        /// Host, right after the game spawned a player ship. If it is one of this mission's CUSTOM ships (the very loadout
+        /// handed to the game, or Void Crew Fleet's copy of ship 1, recognised by its contents), its racks are checked and
+        /// its fabricator level is queued for that ship object, so each ship gets its own level whichever team the host is
+        /// on and wherever the ship is in the game's list.
         /// </summary>
-        public static void CheckRacksAfterSpawn(ShipLoadout loadout, PlayerControlledShip ship)
+        public static void OnShipSpawned(ShipLoadout loadout, PlayerControlledShip ship)
         {
-            if (!PhotonNetwork.IsMasterClient || loadout == null || ship == null || ship.CoreSystems == null || RackPlans.Count == 0) return;
-            RackPlan plan = RackPlans.FirstOrDefault(p => RackSignature(loadout, p.Racks) == p.Signature);
-            if (plan == null) return;
+            if (!PhotonNetwork.IsMasterClient || loadout == null || ship == null || ShipPlans.Count == 0) return;
+            ShipPlan plan = ShipPlans.FirstOrDefault(p => ReferenceEquals(p.Loadout, loadout));
+            string which = plan != null ? plan.Which : null;
+            if (plan == null)
+            {
+                string json = JsonOf(loadout);
+                plan = json == null ? null : ShipPlans.FirstOrDefault(p => p.Json == json);
+                if (plan == null) return;
+                which = "The copy of the CUSTOM " + plan.Hull;
+            }
+            CheckRacks(plan, which, loadout, ship);
+            if (plan.FabricatorLevel > 0 || plan.Contents.Count > 0)
+            {
+                PendingLevels.Add(new PendingLevel
+                {
+                    Ship = ship,
+                    Level = plan.FabricatorLevel,
+                    Contents = plan.Contents.ToDictionary(c => c.Key, c => c.Value.ToList()),
+                    Which = which
+                });
+            }
+        }
+
+        /// <summary>
+        /// Every rack slot of a spawned CUSTOM ship must hold what the CUSTOM loadout puts there. The game fills racks only
+        /// from the loadout, but if a slot ends up with something else (or an empty slot with anything), that item is
+        /// replaced by the chosen one and the log says so.
+        /// </summary>
+        private static void CheckRacks(ShipPlan plan, string which, ShipLoadout loadout, PlayerControlledShip ship)
+        {
+            if (ship.CoreSystems == null) return;
             int replaced = 0;
             foreach (ShipSocketEntry rack in loadout.CoreSystemSockets.Where(c => c != null && plan.Racks.Contains(c.SocketId) && c.Upgrades != null))
             {
@@ -822,14 +1106,14 @@ namespace VoidCrewShipCustomizer
                     CarryableObject current = socket.Payload;
                     GUIDUnion currentGuid = current != null ? current.assetGuid : GUIDUnion.Empty();
                     if (currentGuid == wantedGuid) continue;
-                    Log.Warn("The " + plan.Hull + "'s storage rack slot " + (k + 1) + " (core system " + rack.SocketId + ") held " +
+                    Log.Warn(which + "'s storage rack slot " + (k + 1) + " (core system " + rack.SocketId + ") held " +
                              (current != null ? NameOfItem(currentGuid) : "nothing") + " instead of " + (wantedGuid.IsNull ? "nothing" : NameOfItem(wantedGuid)) + "; fixing it.");
                     if (current != null) socket.DestroyStoredCarryable();
                     if (!wantedGuid.IsNull) PutInSlot(socket, wantedGuid, wanted.ExtraData);
                     replaced++;
                 }
             }
-            if (replaced > 0) Log.Warn("Put " + replaced + " storage rack slot(s) of the " + plan.Hull + " back to its CUSTOM loadout.");
+            if (replaced > 0) Log.Warn("Put " + replaced + " storage rack slot(s) of " + which.ToLowerInvariant() + " back to its CUSTOM loadout.");
         }
 
         private static void PutInSlot(CarryablesSocket socket, GUIDUnion item, JObject extraData)
@@ -850,35 +1134,78 @@ namespace VoidCrewShipCustomizer
         // ---------------------------------------------------------------- the fabricators' starting level
 
         /// <summary>
-        /// Host, early in a fresh CUSTOM mission: each player ship's fabricator starts at its CUSTOM level, once the ship
-        /// is in the world, the way the game itself puts a saved run's fabricator back. Ship 1 is the game's player
-        /// ship; ship 2 (Void Crew Fleet) is the other one. Called a few times a second; gives up after a minute.
+        /// Host, early in a fresh CUSTOM mission: each spawned CUSTOM ship's fabricator starts at its CUSTOM level, and its
+        /// modules get the contents chosen for them, once the ship has had a moment to start up (the way the game itself puts
+        /// a saved run's fabricator back). Called a few times a second; gives up on a ship after a minute.
         /// </summary>
         public static void ApplyFabricatorLevels()
         {
-            if (PendingFabricatorLevels[0] == 0 && PendingFabricatorLevels[1] == 0) return;
-            if (!PhotonNetwork.IsMasterClient || GameSessionManager.InHub || ClientGame.Current == null) return;
-            PlayerControlledShip shipOne = ClientGame.Current.PlayerShip;
-            if (shipOne == null) return;
-            if (_shipSeenAt < 0f) _shipSeenAt = Time.unscaledTime;
-            float waited = Time.unscaledTime - _shipSeenAt;
-            // A moment for the ship's own start-up (its fabricator terminal and upgrade visuals listen for the level).
-            if (waited < 1f) return;
-
-            if (PendingFabricatorLevels[0] > 0 && SetFabricatorLevel(shipOne, PendingFabricatorLevels[0], "The ship")) PendingFabricatorLevels[0] = 0;
-            if (PendingFabricatorLevels[1] > 0)
+            if (PendingLevels.Count == 0 || !PhotonNetwork.IsMasterClient || GameSessionManager.InHub) return;
+            for (int i = PendingLevels.Count - 1; i >= 0; i--)
             {
-                foreach (PlayerControlledShip ship in UnityEngine.Object.FindObjectsOfType<PlayerControlledShip>())
+                PendingLevel pending = PendingLevels[i];
+                if (pending.Ship == null)
                 {
-                    if (ship == null || ship == shipOne) continue;
-                    if (SetFabricatorLevel(ship, PendingFabricatorLevels[1], "Ship 2")) PendingFabricatorLevels[1] = 0;
-                    break;
+                    PendingLevels.RemoveAt(i);
+                    continue;
+                }
+                if (pending.Since < 0f) pending.Since = Time.unscaledTime;
+                float waited = Time.unscaledTime - pending.Since;
+                // A moment for the ship's own start-up (its fabricator terminal and upgrade visuals listen for the level).
+                if (waited < 1f) continue;
+                if (pending.Level > 0 && SetFabricatorLevel(pending.Ship, pending.Level, pending.Which)) pending.Level = 0;
+                if (pending.Contents.Count > 0) FillContents(pending.Ship, pending.Contents, pending.Which);
+                if (pending.Level == 0 && pending.Contents.Count == 0)
+                {
+                    PendingLevels.RemoveAt(i);
+                }
+                else if (waited > 60f)
+                {
+                    if (pending.Level > 0) Log.Warn(pending.Which + "'s fabricator could not be set to its CUSTOM level, so it starts at MK I.");
+                    if (pending.Contents.Count > 0) Log.Warn(pending.Which + ": " + pending.Contents.Count + " module(s) could not be loaded with their chosen contents.");
+                    PendingLevels.RemoveAt(i);
                 }
             }
-            if (waited > 60f && (PendingFabricatorLevels[0] > 0 || PendingFabricatorLevels[1] > 0))
+        }
+
+        /// <summary>
+        /// Host: puts the chosen items into the spawned modules, by hardpoint. Each item goes into its own slot when that
+        /// slot takes it, otherwise into the first empty slot of the module that does, otherwise it is left out (logged).
+        /// A module that isn't there yet is tried again next time.
+        /// </summary>
+        private static void FillContents(PlayerControlledShip ship, Dictionary<int, List<string>> contents, string which)
+        {
+            BuildSocketController controller = ship.GetComponent<BuildSocketController>();
+            if (controller == null || controller.Sockets == null)
             {
-                Log.Warn("Could not set the fabricator's CUSTOM level, so it starts at MK I.");
-                PendingFabricatorLevels[0] = PendingFabricatorLevels[1] = 0;
+                contents.Clear();
+                return;
+            }
+            foreach (KeyValuePair<int, List<string>> pair in contents.ToList())
+            {
+                if (pair.Key < 0 || pair.Key >= controller.Sockets.Count || controller.Sockets[pair.Key] == null)
+                {
+                    contents.Remove(pair.Key);
+                    continue;
+                }
+                CellModule module = controller.Sockets[pair.Key].InstalledModule;
+                if (module == null) continue;
+                List<CarryablesSocket> slots = module.CarryablesSockets.Where(s => s != null).ToList();
+                for (int j = 0; j < pair.Value.Count; j++)
+                {
+                    Option item;
+                    if (string.IsNullOrEmpty(pair.Value[j]) || !Catalog.TryGetRackOption(pair.Value[j], out item) || item.Kind != OptionKind.Item) continue;
+                    CarryablesSocket target = j < slots.Count && slots[j].Payload == null && Catalog.SocketAccepts(slots[j], item, null, false, "a module slot")
+                        ? slots[j]
+                        : slots.FirstOrDefault(s => s.Payload == null && Catalog.SocketAccepts(s, item, null, false, "a module slot"));
+                    if (target == null)
+                    {
+                        Log.Warn(which + ": the " + RichText.Plain(item.Name) + " chosen for hardpoint " + pair.Key + " has no free slot that takes it, so it was left out.");
+                        continue;
+                    }
+                    PutInSlot(target, item.Guid, null);
+                }
+                contents.Remove(pair.Key);
             }
         }
 
@@ -919,13 +1246,18 @@ namespace VoidCrewShipCustomizer
             return level == 2 ? "MK III" : (level == 1 ? "MK II" : "MK I");
         }
 
+        /// <summary>The last mission's ships, levels and notes are done with (back in the hub, or in another room).</summary>
+        private static void ResetMissionState()
+        {
+            _ship2CustomRun = false;
+            ShipPlans.Clear();
+            PendingLevels.Clear();
+        }
+
         /// <summary>Back in the hub after a CUSTOM mission: choose that CUSTOM loadout again, as the game does for its own.</summary>
         public static void OnHubLoaded(HubShipManager manager)
         {
-            _ship2CustomRun = false;
-            PendingFabricatorLevels[0] = PendingFabricatorLevels[1] = 0;
-            _shipSeenAt = -1f;
-            RackPlans.Clear();
+            ResetMissionState();
             MatchRules.OnHubLoaded();
             if (!PhotonNetwork.IsMasterClient || ResumeShip.IsNull || manager == null) return;
             GUIDUnion ship = ResumeShip;
@@ -944,10 +1276,14 @@ namespace VoidCrewShipCustomizer
             ResumeShip = GUIDUnion.Empty();
             ActiveShip2 = GUIDUnion.Empty();
             RemoteConfig2 = null;
-            _ship2CustomRun = false;
+            ResetMissionState();
             TerminalShip = 1;
             HostLayouts.Clear();
             HostLayouts2.Clear();
+            ConfirmedLayouts.Clear();
+            ConfirmedLayouts2.Clear();
+            PartEditors.Clear();
+            LayoutEditors.Clear();
             LastChangeToast.Clear();
             RefreshAll();
         }

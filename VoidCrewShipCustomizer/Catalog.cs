@@ -8,10 +8,12 @@ using CG.Game.SpaceObjects.Controllers;
 using CG.Objects;
 using CG.Ship.Hull;
 using CG.Ship.Modules;
+using CG.Ship.Modules.Shield;
 using CG.Ship.Object;
 using CG.Space;
 using Client.Player.Interactions;
 using Gameplay.CompositeWeapons;
+using Gameplay.Power;
 using Newtonsoft.Json.Linq;
 using ResourceAssets;
 using UnityEngine;
@@ -53,6 +55,24 @@ namespace VoidCrewShipCustomizer
         public Type ModuleType;
         /// <summary>Read once by <see cref="Catalog.BlessingOf"/>: a Blessed Homunculus's blessing, "" for none, null until read.</summary>
         public string Blessing;
+        /// <summary>The power a module or weapon draws when it is on, and the power a generator makes (the game's base values).</summary>
+        public int PowerUse;
+        public int PowerMade;
+    }
+
+    /// <summary>
+    /// One item slot inside a module or weapon: a weapon's ammo or battery slots (its magazine) and weapon mod slots (its
+    /// mod rack), a shield's or charge station's power cell slots, a payload launcher's payload slots. In the order the
+    /// game fills them from a loadout.
+    /// </summary>
+    internal sealed class ContentSlot
+    {
+        public int Index;
+        /// <summary>The slot as the module's prefab has it: its accepted / rejected rules.</summary>
+        public CarryablesSocket Socket;
+        public readonly Dictionary<string, bool> AcceptCache = new Dictionary<string, bool>();
+        /// <summary>What it is for in a word (AMMO, POWER, MOD ...), worked out from what it takes; null until asked.</summary>
+        public string Kind;
     }
 
     /// <summary>One build socket (hardpoint position) of a ship, read from the ship prefab.</summary>
@@ -94,6 +114,8 @@ namespace VoidCrewShipCustomizer
         public readonly List<SocketInfo> Sockets = new List<SocketInfo>();
         public readonly List<ShelfInfo> Shelves = new List<ShelfInfo>();
         public int GroupCount;
+        /// <summary>The power the ship makes on its own, without generator modules (the game's base values).</summary>
+        public int BasePower;
     }
 
     /// <summary>
@@ -213,6 +235,15 @@ namespace VoidCrewShipCustomizer
                 hull.Sockets.Add(info);
             }
             hull.GroupCount = Hardpoints.LinkOverlaps(hull.Sockets);
+
+            try
+            {
+                hull.BasePower = shipPrefab.GetComponentsInChildren<PowerProvider>(true).Where(p => p != null && p.PowerProvided != null).Sum(p => p.PowerProvided.BaseValue);
+            }
+            catch (Exception e)
+            {
+                Log.Verbose("Could not read the " + hull.Name + "'s own power: " + e.Message);
+            }
 
             PlayerControlledShip ship = shipPrefab.GetComponent<PlayerControlledShip>();
             CellModule[] core = ship != null ? ship.CoreSystems : null;
@@ -357,10 +388,40 @@ namespace VoidCrewShipCustomizer
             {
                 var guid = new GUIDUnion(code.Substring(2));
                 if (code.StartsWith("m:")) option = RawModuleOption(guid);
-                else if (code.StartsWith("i:")) option = ItemOption(guid, "OTHER", 99);
+                else if (code.StartsWith("i:") && IsCarryable(guid)) option = ItemOption(guid, "OTHER", 99);
                 if (option != null) ByCode[code] = option;
             }
             return option != null;
+        }
+
+        /// <summary>
+        /// A module or weapon that can go on a hardpoint (one the hardpoint lists show, or a module only a game loadout
+        /// uses), never anything else a code could name.
+        /// </summary>
+        public static bool TryGetHardpointOption(string code, out Option option)
+        {
+            return TryGetOption(code, out option) && (option.Kind == OptionKind.Module || option.Kind == OptionKind.Weapon) && option.HasSize;
+        }
+
+        /// <summary>Something that can lie on a storage rack: an item the player can carry, or a weapon crate.</summary>
+        public static bool TryGetRackOption(string code, out Option option)
+        {
+            if (!TryGetOption(code, out option)) return false;
+            if (option.Kind == OptionKind.WeaponCrate) return true;
+            return option.Kind == OptionKind.Item && IsCarryable(option.Guid);
+        }
+
+        /// <summary>Whether a GUID is an item players can carry (not a module, a creature or anything else that can spawn).</summary>
+        public static bool IsCarryable(GUIDUnion guid)
+        {
+            try
+            {
+                return !guid.IsNull && ResourceAssetContainer<CarryableContainer, CarryableObject, CarryableDef>.Instance.HasItem(guid);
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>Whether the game can spawn this GUID (ObjectFactory looks every spawned object up here).</summary>
@@ -371,7 +432,7 @@ namespace VoidCrewShipCustomizer
 
         private static Option RawModuleOption(GUIDUnion guid)
         {
-            if (!CanSpawn(guid)) return null;
+            if (!CanSpawn(guid) || !ResourceAssetContainer<ModuleContainer, CellModule, ModuleDef>.Instance.HasItem(guid)) return null;
             ContextInfo context = ContextOf(guid);
             var option = new Option
             {
@@ -397,6 +458,7 @@ namespace VoidCrewShipCustomizer
                     option.Size = size;
                     option.SingleInstance = prefab.BuildingConstraints.AllowOnlySingleInstance;
                     option.ModuleType = prefab.GetType();
+                    ReadPower(option, prefab);
                 }
             }
             catch (Exception e)
@@ -422,8 +484,10 @@ namespace VoidCrewShipCustomizer
                     if (!TryGetSize(core.BuildingConstraints, out size)) continue;
                     ContextInfo context = def.ContextInfo as ContextInfo;
                     if (IsMissing(context)) continue;
+                    var stats = data.Data.CoreStats != null && !data.Data.CoreStats.IsNull ? data.Data.CoreStats.Asset as CoreStatDescriptor : null;
                     list.Add(new Option
                     {
+                        PowerUse = stats != null ? stats.PowerRequirement : 0,
                         Code = "w:" + def.AssetGuid.AsHex(),
                         Kind = OptionKind.Weapon,
                         Guid = def.AssetGuid,
@@ -461,7 +525,7 @@ namespace VoidCrewShipCustomizer
                     if (!TryGetSize(prefab.BuildingConstraints, out size)) continue;
                     ContextInfo context = ContextOf(def.AssetGuid);
                     if (IsMissing(context)) continue;
-                    list.Add(new Option
+                    var option = new Option
                     {
                         Code = "m:" + def.AssetGuid.AsHex(),
                         Kind = OptionKind.Module,
@@ -478,12 +542,30 @@ namespace VoidCrewShipCustomizer
                         Size = size,
                         SingleInstance = prefab.BuildingConstraints.AllowOnlySingleInstance,
                         ModuleType = prefab.GetType()
-                    });
+                    };
+                    ReadPower(option, prefab);
+                    list.Add(option);
                 }
                 catch (Exception e)
                 {
                     Log.Verbose("Skipped module " + (def != null ? def.Path : "?") + ": " + e.Message);
                 }
+            }
+        }
+
+        /// <summary>A module's power: what it draws when on (its power drain) and, for a generator, what it makes.</summary>
+        private static void ReadPower(Option option, CellModule prefab)
+        {
+            try
+            {
+                PowerDrain drain = prefab.GetComponentInChildren<PowerDrain>(true);
+                option.PowerUse = drain != null && drain.PowerWanted != null ? drain.PowerWanted.BaseValue : 0;
+                PowerProvider provider = prefab.GetComponentInChildren<PowerProvider>(true);
+                option.PowerMade = provider != null && provider.PowerProvided != null ? provider.PowerProvided.BaseValue : 0;
+            }
+            catch (Exception e)
+            {
+                Log.Verbose("Could not read the power of " + option.Name + ": " + e.Message);
             }
         }
 
@@ -646,14 +728,23 @@ namespace VoidCrewShipCustomizer
         public static bool ShelfAccepts(ShelfInfo shelf, Option item)
         {
             if (shelf.Slots.Count == 0) return true;
+            return SocketAccepts(shelf.Slots[0], item, shelf.AcceptCache, true, shelf.Name);
+        }
+
+        /// <summary>
+        /// Whether an item slot takes an item, by its accepted / rejected rules (cached per item). <paramref name="whenUnsure"/>
+        /// is the answer when the rules can't be read.
+        /// </summary>
+        public static bool SocketAccepts(CarryablesSocket slot, Option item, Dictionary<string, bool> cache, bool whenUnsure, string what)
+        {
+            if (slot == null || item == null) return whenUnsure;
             string key = item.Kind == OptionKind.WeaponCrate ? "crate" : item.Code;
             bool accepted;
-            if (shelf.AcceptCache.TryGetValue(key, out accepted)) return accepted;
+            if (cache != null && cache.TryGetValue(key, out accepted)) return accepted;
 
             accepted = true;
             try
             {
-                CarryablesSocket slot = shelf.Slots[0];
                 bool needPrefab = false;
                 if (slot.rejectedList != null)
                 {
@@ -684,11 +775,127 @@ namespace VoidCrewShipCustomizer
             }
             catch (Exception e)
             {
-                Log.Verbose("Could not check whether " + shelf.Name + " takes " + item.Name + ": " + e.Message);
-                accepted = true;
+                Log.Verbose("Could not check whether " + what + " takes " + item.Name + ": " + e.Message);
+                accepted = whenUnsure;
             }
-            shelf.AcceptCache[key] = accepted;
+            if (cache != null) cache[key] = accepted;
             return accepted;
+        }
+
+        // ---------------------------------------------------------------- what modules and weapons hold
+
+        private static readonly Dictionary<string, List<ContentSlot>> ContentSlotsByCode = new Dictionary<string, List<ContentSlot>>();
+
+        /// <summary>
+        /// The item slots of a module or weapon (empty when it has none, or they can't be read), read from its prefab the
+        /// way the game puts them together: a module's own slots, then those of its shield battery loaders; a weapon's
+        /// core, then its magazine, then its mod rack.
+        /// </summary>
+        public static List<ContentSlot> ContentSlotsOf(Option option)
+        {
+            if (option == null || (option.Kind != OptionKind.Module && option.Kind != OptionKind.Weapon)) return new List<ContentSlot>();
+            List<ContentSlot> slots;
+            if (ContentSlotsByCode.TryGetValue(option.Code, out slots)) return slots;
+            slots = new List<ContentSlot>();
+            try
+            {
+                foreach (CarryablesSocket socket in PrefabSockets(option)) slots.Add(new ContentSlot { Index = slots.Count, Socket = socket });
+            }
+            catch (Exception e)
+            {
+                Log.Verbose("Could not read the item slots of " + option.Name + ": " + e.Message);
+                slots = new List<ContentSlot>();
+            }
+            ContentSlotsByCode[option.Code] = slots;
+            return slots;
+        }
+
+        private static List<CarryablesSocket> PrefabSockets(Option option)
+        {
+            var list = new List<CarryablesSocket>();
+            if (option.Kind == OptionKind.Weapon)
+            {
+                CompositeWeaponDataDef def = ResourceAssetContainer<CompositeWeaponDataContainer, CompositeWeaponData, CompositeWeaponDataDef>.Instance.GetAssetDefById(option.Guid, false);
+                CompositeWeapon data = def != null && def.Asset != null ? def.Asset.Data : null;
+                if (data == null) return list;
+                if (data.CoreElement != null && !data.CoreElement.IsNull) AddProviderSockets(list, data.CoreElement.Asset);
+                if (data.MagazineElement != null && !data.MagazineElement.IsNull) AddProviderSockets(list, data.MagazineElement.Asset);
+                if (data.ModRackElement != null && !data.ModRackElement.IsNull)
+                {
+                    WeaponModRack rack = data.ModRackElement.Asset;
+                    if (rack != null && rack.ModSockets != null)
+                    {
+                        foreach (ModSocket socket in rack.ModSockets) AddSocket(list, socket);
+                    }
+                }
+                return list;
+            }
+            ModuleDef moduleDef = ResourceAssetContainer<ModuleContainer, CellModule, ModuleDef>.Instance.GetAssetDefById(option.Guid, false);
+            CellModule prefab = moduleDef != null ? moduleDef.Asset : null;
+            if (prefab == null) return list;
+            AddProviderSockets(list, prefab);
+            foreach (ShieldBatteryLoader loader in prefab.GetComponentsInChildren<ShieldBatteryLoader>(true)) AddProviderSockets(list, loader);
+            return list;
+        }
+
+        private static void AddProviderSockets(List<CarryablesSocket> list, Component owner)
+        {
+            CarryablesSocketProvider provider = owner != null ? owner.GetComponent<CarryablesSocketProvider>() : null;
+            if (provider == null || provider.Sockets == null) return;
+            foreach (CarryablesSocket socket in provider.Sockets) AddSocket(list, socket);
+        }
+
+        private static void AddSocket(List<CarryablesSocket> list, CarryablesSocket socket)
+        {
+            if (socket != null && !list.Contains(socket)) list.Add(socket);
+        }
+
+        /// <summary>Whether a module's item slot takes an item (when the rules can't be read: no, so nothing odd goes in).</summary>
+        public static bool ContentSlotAccepts(ContentSlot slot, Option item)
+        {
+            return item != null && item.Kind == OptionKind.Item && SocketAccepts(slot.Socket, item, slot.AcceptCache, false, "an item slot");
+        }
+
+        /// <summary>A module's item slot in a word, from what it takes: AMMO, POWER, MOD or ITEM.</summary>
+        public static string KindOf(ContentSlot slot)
+        {
+            if (slot.Kind != null) return slot.Kind;
+            List<string> categories = ItemOptions.Where(o => o.Kind == OptionKind.Item && ContentSlotAccepts(slot, o)).Select(o => o.RuleCategory).ToList();
+            string most = categories.GroupBy(c => c).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
+            switch (most)
+            {
+                case "WEAPON MODS": slot.Kind = "MOD"; break;
+                case "AMMO & POWER": slot.Kind = "AMMO"; break;
+                case "SUPPORT ITEMS": slot.Kind = "POWER"; break;
+                default: slot.Kind = "ITEM"; break;
+            }
+            return slot.Kind;
+        }
+
+        /// <summary>
+        /// What a module or weapon usually starts loaded with: what one of the game's own loadouts gives it (ammo, power
+        /// cells and the like; see <see cref="IsDefaultContent"/>), one code per item slot ("" empty). Empty when no
+        /// loadout gives it anything, or the CopyPresetModuleContents setting is off.
+        /// </summary>
+        public static List<string> UsualContents(Option option)
+        {
+            var codes = new List<string>();
+            JObject template;
+            if (option == null || !Settings.CopyPresetModuleContents.Value || !TryGetPresetContents(option.Guid, out template)) return codes;
+            try
+            {
+                ShipSocketEntry entry = template.ToObject<ShipSocketEntry>();
+                if (entry.Upgrades == null) return codes;
+                foreach (ShipAssetRef item in entry.Upgrades)
+                {
+                    codes.Add(item != null && !item.IsNull && CanSpawn(item.AssetGuid) && IsDefaultContent(item) ? CodeFor(item) : "");
+                }
+            }
+            catch (Exception e)
+            {
+                Log.Verbose("Could not read the usual contents of " + option.Name + ": " + e.Message);
+            }
+            return codes;
         }
 
         private static readonly System.Reflection.FieldInfo CompareMethodField = HarmonyLib.AccessTools.Field(typeof(CsObjectReference), "compareMethod");
@@ -745,17 +952,20 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>
         /// A socket entry from one of the game's loadouts that has the given module or weapon, as JSON, so a custom
-        /// loadout can start that module with the same contents (ammo, power cells) the game's designers gave it.
+        /// loadout can start that module with the same contents (ammo, power cells) the game's designers gave it. Only the
+        /// loadouts the terminal lists count: the challenge and test loadouts fill some weapons with Legendary mods.
         /// </summary>
         public static bool TryGetPresetContents(GUIDUnion moduleOrWeapon, out JObject entry)
         {
             if (!_presetContentsRead)
             {
                 _presetContentsRead = true;
+                HashSet<ShipLoadoutDataDef> listed = ListedLoadouts();
                 foreach (ShipLoadoutDataDef def in ResourceAssetContainer<ShipLoadoutDataContainer, ShipLoadoutData, ShipLoadoutDataDef>.Instance.AssetDescriptions)
                 {
                     try
                     {
+                        if (!listed.Contains(def)) continue;
                         foreach (ShipSocketEntry socket in def.Asset.ShipLoadout.Sockets)
                         {
                             if (socket == null || socket.Module == null || socket.Module.IsNull) continue;
@@ -775,6 +985,34 @@ namespace VoidCrewShipCustomizer
                 }
             }
             return PresetContents.TryGetValue(moduleOrWeapon, out entry);
+        }
+
+        /// <summary>The loadouts the terminal lists (for every ship), unlocked or not; not the challenge and test ones.</summary>
+        private static HashSet<ShipLoadoutDataDef> ListedLoadouts()
+        {
+            var listed = new HashSet<ShipLoadoutDataDef>();
+            try
+            {
+                ShipLoadoutDataContainer container = ResourceAssetContainer<ShipLoadoutDataContainer, ShipLoadoutData, ShipLoadoutDataDef>.Instance;
+                foreach (ShipLoadoutDataDef def in container.GetUnlockedShipDefinitionsFromHighestRankPlayer()) listed.Add(def);
+                foreach (ShipLoadoutDataDef def in container.GetLockedShipDefinitionsFromHighestRankPlayer()) listed.Add(def);
+            }
+            catch (Exception e)
+            {
+                Log.Warn("Could not read which loadouts the terminal lists: " + e.Message);
+            }
+            return listed;
+        }
+
+        /// <summary>
+        /// Whether a module's default contents (copied from the game's loadouts) keep this item: ammo, power cells and the
+        /// like do; weapon mods, relics and special items don't (pick those in the module's CONTENTS instead).
+        /// </summary>
+        public static bool IsDefaultContent(ShipAssetRef item)
+        {
+            Option option;
+            if (!TryGetOption(CodeFor(item), out option)) return false;
+            return option.RuleCategory != "WEAPON MODS" && option.RuleCategory != "RELICS" && option.RuleCategory != "SPECIAL";
         }
 
         private static bool HasContents(JObject entry)

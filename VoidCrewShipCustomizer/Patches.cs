@@ -42,14 +42,15 @@ namespace VoidCrewShipCustomizer
             // Progression must pause during CUSTOM runs (Void Crew modding rules), so this one is required too.
             core &= Patch("CG.Profile.PlayerRewardsCollection", "AddItem", nameof(BlockRewardsPrefix), null);
 
-            // Shows CUSTOM (rather than the loadout standing in for it) as the room's choice everywhere in the hub.
-            _currentShip = AccessTools.FieldRefAccess<HubShipManager, ShipLoadoutDataDef>("_currentShipSelected");
-            _selectionChanged = AccessTools.Field(typeof(HubShipManager), "ShipSelectionChanged");
-            if (_currentShip != null && _selectionChanged != null) Patch("HubShipManager", "NotifyShipSelected", nameof(NotifyShipSelectedPrefix), null);
-            else Log.Warn("Could not find HubShipManager's selection fields; the terminal will show the stand-in loadout as chosen instead of CUSTOM.");
+            // Shows CUSTOM (rather than the loadout standing in for it) as the room's choice everywhere in the hub. Required:
+            // without it the game sends a CUSTOM id on to every player each time a quest is picked.
+            core &= PatchSelectionNotice();
 
             Patch("HubShipManager", "Start", null, nameof(HubStartPostfix));
             Patch("Gameplay.Hub.HubQuestManager", "SelectPreservedSessionQuest", nameof(SelectSavedRunPrefix), null);
+            // A saved CUSTOM run doesn't start while someone in the room is still without the mod (they join faster than
+            // the room is checked: the start countdown is 30 s at most).
+            Patch("Gameplay.Hub.HubQuestManager", "StartQuest", nameof(StartQuestPrefix), null);
             Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnDestroy", nameof(TerminalDestroyPrefix), null);
             Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnLeaveUI", null, nameof(TerminalLeavePostfix));
             // During a CUSTOM run the storage racks take any item, as the CUSTOM editor lets them start with any item.
@@ -65,10 +66,39 @@ namespace VoidCrewShipCustomizer
             Patch("CG.Profile.PlayerProfileData", "AddQuestProgress", nameof(BlockQuestProgressPrefix), null);
             Patch("CG.Cloud.CloudPlayerProfileDataSync", "AddQuestProgress", nameof(BlockQuestProgressPrefix), null);
             Patch("CG.Profile.PhotonPlayerDataSync", "AddQuestProgress", nameof(BlockQuestProgressPrefix), null);
+            // Tracked stats (the profile's lifetime counters, Steam stats, and the achievements built on them) and the daily
+            // and weekly quests, which count on their own and are saved when the mission ends.
+            Patch("TrackedMetric", "OnMetricProgressChange", nameof(BlockStatsPrefix), null);
+            Patch("CG.Profile.PlayerTrackedMetrics", "SubmitProgress", nameof(BlockStatsPrefix), null);
+            Patch("CloudPlayerTrackedMetricSync", "SubmitProgress", nameof(BlockStatsPrefix), null);
+            Patch("SteamPlayerTrackedMetrics", "SubmitProgress", nameof(BlockStatsPrefix), null);
+            Patch("Metaquest", "OnMetricProgress", nameof(BlockDailyQuestsPrefix), null);
 
             CustomLoadouts.Available = core;
             if (core) Log.Info("All game patches are in; the CUSTOM loadout is available at the ship loadout terminal.");
             else Log.Error("Some patches the CUSTOM loadout needs could not be applied (see above), so it is turned off. The game itself is unaffected.");
+        }
+
+        /// <summary>HubShipManager.NotifyShipSelected, with the two private fields its replacement needs.</summary>
+        private static bool PatchSelectionNotice()
+        {
+            try
+            {
+                // FieldRefAccess throws (rather than returning null) when the field isn't there.
+                _currentShip = AccessTools.FieldRefAccess<HubShipManager, ShipLoadoutDataDef>("_currentShipSelected");
+                _selectionChanged = AccessTools.Field(typeof(HubShipManager), "ShipSelectionChanged");
+            }
+            catch (Exception e)
+            {
+                Log.Error("Could not find HubShipManager's selection fields (the game may have changed): " + e.Message);
+                return false;
+            }
+            if (_currentShip == null || _selectionChanged == null)
+            {
+                Log.Error("Could not find HubShipManager's selection fields (the game may have changed).");
+                return false;
+            }
+            return Patch("HubShipManager", "NotifyShipSelected", nameof(NotifyShipSelectedPrefix), null);
         }
 
         private static bool Patch(string typeName, string methodName, string prefix, string postfix)
@@ -116,6 +146,7 @@ namespace VoidCrewShipCustomizer
                     {
                         Notice.Show("Everyone in the room needs Ship Customizer for CUSTOM. Not yet: " + string.Join(", ", missing.ToArray()) +
                                     ". (Just joined? Try again in a few seconds.)");
+                        TerminalUi.OnSelectRefused();
                         return false;
                     }
                     if (!PhotonNetwork.IsMasterClient)
@@ -124,11 +155,13 @@ namespace VoidCrewShipCustomizer
                         // loadout CUSTOM stands in for. A host older than 0.5.0 keeps CUSTOM to itself.
                         if (RoomSync.HostSharesLayouts()) return true;
                         TerminalUi.Toast("Only the host can choose CUSTOM here: the host's Ship Customizer is older than 0.5.0.");
+                        TerminalUi.OnSelectRefused();
                         return false;
                     }
                     if (!CustomLoadouts.EnsureRoomMarkedModded())
                     {
                         TerminalUi.Toast("Marking the room [mod_session] first; choose CUSTOM again in a moment.");
+                        TerminalUi.OnSelectRefused();
                         return false;
                     }
                     CustomLoadouts.ActivateAsHost(hull);
@@ -140,6 +173,7 @@ namespace VoidCrewShipCustomizer
                     // A CUSTOM id this player can't use (CUSTOM is off here): never let the game pass it on to players
                     // who don't know it.
                     Log.Warn("Ignored a choice of a CUSTOM loadout, because CUSTOM is not available here.");
+                    TerminalUi.OnSelectRefused();
                     return false;
                 }
                 if (PhotonNetwork.IsMasterClient) CustomLoadouts.DeactivateAsHost();
@@ -147,6 +181,12 @@ namespace VoidCrewShipCustomizer
             catch (Exception e)
             {
                 Log.Failure("Choosing a ship loadout", e);
+                // Never let a CUSTOM id through to the game (and the other players) because something went wrong here.
+                if (CustomLoadouts.LooksCustom(new GUIDUnion(guid)))
+                {
+                    TerminalUi.OnSelectRefused();
+                    return false;
+                }
             }
             return true;
         }
@@ -221,6 +261,36 @@ namespace VoidCrewShipCustomizer
             catch (Exception e)
             {
                 Log.Failure("Checking the saved run", e);
+                return true;
+            }
+        }
+
+        private static float _lastStartRefusal = -100f;
+
+        /// <summary>
+        /// Host: a saved CUSTOM run doesn't start while anyone in the room is still without the mod (a player who joined a
+        /// moment ago and hasn't loaded yet counts too). The game tries again each frame, so it starts as soon as everyone
+        /// is ready; until then the countdown stays at zero and the chat says why, every few seconds.
+        /// </summary>
+        private static bool StartQuestPrefix(Gameplay.Hub.HubQuestManager.SessionStartType startType)
+        {
+            try
+            {
+                if (!PhotonNetwork.IsMasterClient || startType != Gameplay.Hub.HubQuestManager.SessionStartType.Preserved) return true;
+                PreservedGameSession saved = PlayerProfile.Instance.PreservedSession.PreservedSession;
+                if (saved == null || !LoadoutStore.WasCustomRun(saved.GameSessionID)) return true;
+                List<string> missing = RoomSync.PlayersWithoutMod(false);
+                if (missing.Count == 0) return true;
+                if (UnityEngine.Time.unscaledTime - _lastStartRefusal > 10f)
+                {
+                    _lastStartRefusal = UnityEngine.Time.unscaledTime;
+                    Notice.Show("The saved CUSTOM run waits for everyone to have Ship Customizer. Not yet: " + string.Join(", ", missing.ToArray()) + ".");
+                }
+                return false;
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Checking the saved CUSTOM run before it starts", e);
                 return true;
             }
         }
@@ -359,7 +429,7 @@ namespace VoidCrewShipCustomizer
         {
             try
             {
-                CustomLoadouts.CheckRacksAfterSpawn(__instance, __result);
+                CustomLoadouts.OnShipSpawned(__instance, __result);
             }
             catch (Exception e)
             {
@@ -382,6 +452,16 @@ namespace VoidCrewShipCustomizer
         private static bool BlockQuestProgressPrefix()
         {
             return !ProgressionGuard.Block("quest progress");
+        }
+
+        private static bool BlockStatsPrefix()
+        {
+            return !ProgressionGuard.Block("tracked stats");
+        }
+
+        private static bool BlockDailyQuestsPrefix()
+        {
+            return !ProgressionGuard.Block("daily and weekly quest progress");
         }
     }
 }

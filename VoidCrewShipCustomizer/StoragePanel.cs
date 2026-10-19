@@ -19,8 +19,10 @@ namespace VoidCrewShipCustomizer
         private readonly Label _summary;
         private readonly HullInfo _hull;
         private readonly Func<HullConfig> _config;
-        private readonly bool _editable;
-        private readonly string _viewOnlyReason;
+        private readonly Func<bool> _editable;
+        private readonly Func<string> _viewOnlyReason;
+        private readonly VisualElement _emptyAll;
+        private readonly VisualElement _loadRacks;
         private readonly Func<string, bool> _notAllowed;
         private readonly Action<ShelfInfo, int> _onSlotClicked;
 
@@ -32,10 +34,12 @@ namespace VoidCrewShipCustomizer
             get { return _backdrop.parent != null; }
         }
 
-        /// <param name="viewOnlyReason">Why the racks can't be changed, shown when <paramref name="editable"/> is false.</param>
+        /// <param name="editable">Whether this player may change the racks now (asked again each time the window redraws:
+        /// a Void Crew Fleet team change can give or take the right while it is open).</param>
+        /// <param name="viewOnlyReason">Why the racks can't be changed, shown when <paramref name="editable"/> says no.</param>
         /// <param name="team">A Void Crew Fleet team's colour in a Fleet Battle (the frame and bars take it), otherwise null.</param>
         /// <param name="notAllowed">Whether an item's code breaks a Fleet Battle's match rules (its tile is marked).</param>
-        public StoragePanel(VisualElement host, HullInfo hull, Func<HullConfig> config, bool editable, string viewOnlyReason, Color? team,
+        public StoragePanel(VisualElement host, HullInfo hull, Func<HullConfig> config, Func<bool> editable, Func<string> viewOnlyReason, Color? team,
                             Func<string, bool> notAllowed, Action<ShelfInfo, int> onSlotClicked, Action<string> onAction)
         {
             _hull = hull;
@@ -51,10 +55,9 @@ namespace VoidCrewShipCustomizer
             {
                 if (e.target == _backdrop) Close();
             });
-            VisualElement[] actions = editable
-                ? new VisualElement[] { Ui.SmallGameButton("EMPTY ALL", () => Act("empty")), Ui.SmallGameButton("LOAD RACKS", () => Act("copy")) }
-                : new VisualElement[0];
-            VisualElement body = Ui.GameWindow(_backdrop, "STORAGE RACKS · " + hull.Name.ToUpperInvariant(), Close, team, 10, 5, actions);
+            _emptyAll = Ui.SmallGameButton("EMPTY ALL", () => Act("empty"));
+            _loadRacks = Ui.SmallGameButton("LOAD RACKS", () => Act("copy"));
+            VisualElement body = Ui.GameWindow(_backdrop, "STORAGE RACKS · " + hull.Name.ToUpperInvariant(), Close, team, 10, 5, _emptyAll, _loadRacks);
 
             _summary = Ui.GameText("", "ui-text-size__medium");
             _summary.style.unityTextAlign = TextAnchor.MiddleCenter;
@@ -75,7 +78,7 @@ namespace VoidCrewShipCustomizer
 
         private void Act(string action)
         {
-            if (OnAction != null) OnAction(action);
+            if (OnAction != null && _editable()) OnAction(action);
         }
 
         /// <summary>Redraws the tiles from the current loadout.</summary>
@@ -83,13 +86,16 @@ namespace VoidCrewShipCustomizer
         {
             _scroll.Clear();
             HullConfig config = _config();
+            bool editable = _editable();
+            _emptyAll.style.display = editable ? DisplayStyle.Flex : DisplayStyle.None;
+            _loadRacks.style.display = editable ? DisplayStyle.Flex : DisplayStyle.None;
             int slots = 0;
             foreach (ShelfInfo shelf in _hull.Shelves) slots += shelf.Slots.Count;
             int notAllowed = _notAllowed == null ? 0 : config.Storage.Values.Where(rack => rack != null).Sum(rack => rack.Count(_notAllowed));
             _summary.text = _hull.Shelves.Count == 0
                 ? "This ship has no storage racks the customizer can fill."
                 : string.Format("{0} of {1} slots filled. {2}", config.StoredCount, slots,
-                    _editable ? "Click a slot to choose what the ship starts with there." : _viewOnlyReason) +
+                    editable ? "Click a slot to choose what the ship starts with there." : _viewOnlyReason()) +
                   (notAllowed > 0 ? " " + notAllowed + " marked NOT ALLOWED break this match's rules and come off when the mission starts." : "");
 
             foreach (ShelfInfo shelf in _hull.Shelves)
@@ -109,14 +115,13 @@ namespace VoidCrewShipCustomizer
                 for (int i = 0; i < shelf.Slots.Count; i++)
                 {
                     string code = codes != null && i < codes.Count ? codes[i] : "";
-                    grid.Add(MakeTile(shelf, i, code));
+                    grid.Add(MakeTile(shelf, i, code, editable));
                 }
                 _scroll.Add(grid);
             }
-            foreach (VisualElement child in _scroll.contentContainer.Children()) Ui.Announce(child);
         }
 
-        private VisualElement MakeTile(ShelfInfo shelf, int index, string code)
+        private VisualElement MakeTile(ShelfInfo shelf, int index, string code, bool editable)
         {
             Option option = null;
             bool filled = !string.IsNullOrEmpty(code) && Catalog.TryGetOption(code, out option);
@@ -150,17 +155,7 @@ namespace VoidCrewShipCustomizer
                 name.style.overflow = Overflow.Hidden;
                 name.style.flexShrink = 0;
                 tile.Add(name);
-                if (option.Context != null)
-                {
-                    try
-                    {
-                        tile.AddManipulator(new TooltipManipulatorBase<ContextInfoTooltipVE, ContextHoverData>(new ContextHoverData(option.Context, option.Guid)));
-                    }
-                    catch
-                    {
-                        // No tooltip, no problem.
-                    }
-                }
+                Ui.Tooltip(tile, option.Context, option.Guid);
             }
             else
             {
@@ -197,7 +192,7 @@ namespace VoidCrewShipCustomizer
             }
             tile.Add(top);
 
-            if (_editable)
+            if (editable)
             {
                 Ui.Hover(tile, background, Ui.RowHover);
                 Ui.Click(tile, () => _onSlotClicked(shelf, index));
@@ -219,14 +214,7 @@ namespace VoidCrewShipCustomizer
         public void Close()
         {
             if (_backdrop.parent == null) return;
-            try
-            {
-                ContextInfoController.SharedContextInfoVe?.Hide();
-            }
-            catch
-            {
-                // The tooltip may already be gone.
-            }
+            Ui.HideTooltip();
             _backdrop.RemoveFromHierarchy();
             Action closed = Closed;
             Closed = null;

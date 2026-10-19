@@ -21,6 +21,13 @@ namespace VoidCrewShipCustomizer
         /// <summary>Storage rack (the ship's core system index) to one code per rack slot: "i:" item, "c:" weapon crate, "" empty.</summary>
         public SortedDictionary<int, List<string>> Storage = new SortedDictionary<int, List<string>>();
 
+        /// <summary>
+        /// What modules and weapons start loaded with (ammo, batteries, power cells, weapon mods), by hardpoint position:
+        /// one "i:" code per item slot of the module, "" for an empty slot. A position without an entry starts with the
+        /// game's usual contents for that module.
+        /// </summary>
+        public SortedDictionary<int, List<string>> Contents = new SortedDictionary<int, List<string>>();
+
         /// <summary>"i:" code of the homunculus the ship starts with; "" for the standard one.</summary>
         public string Homunculus = "";
 
@@ -38,11 +45,32 @@ namespace VoidCrewShipCustomizer
             return JsonConvert.DeserializeObject<HullConfig>(JsonConvert.SerializeObject(this));
         }
 
-        /// <summary>Fills in what older files (or older versions on other PCs) leave out, and keeps the numbers in range.</summary>
+        /// <summary>
+        /// Fills in what older files (or older versions on other PCs) leave out, drops empty entries a damaged file can have
+        /// (a missing rack, a missing code), and keeps the numbers in range.
+        /// </summary>
         public HullConfig Normalized()
         {
             if (Slots == null) Slots = new SortedDictionary<int, string>();
             if (Storage == null) Storage = new SortedDictionary<int, List<string>>();
+            foreach (int key in Slots.Keys.ToList())
+            {
+                if (string.IsNullOrEmpty(Slots[key])) Slots.Remove(key);
+            }
+            foreach (int key in Storage.Keys.ToList())
+            {
+                List<string> rack = Storage[key];
+                if (rack == null) Storage[key] = new List<string>();
+                else for (int i = 0; i < rack.Count; i++) rack[i] = rack[i] ?? "";
+            }
+            if (Contents == null) Contents = new SortedDictionary<int, List<string>>();
+            foreach (int key in Contents.Keys.ToList())
+            {
+                // Contents belong to the module at that position: none there, none kept.
+                List<string> inside = Contents[key];
+                if (inside == null || !Slots.ContainsKey(key)) Contents.Remove(key);
+                else for (int i = 0; i < inside.Count; i++) inside[i] = inside[i] ?? "";
+            }
             if (Homunculus == null) Homunculus = "";
             if (CopiedFrom == null) CopiedFrom = "";
             Alloys = Math.Max(-1, Math.Min(Alloys, MaxAlloys));
@@ -50,14 +78,16 @@ namespace VoidCrewShipCustomizer
             return this;
         }
 
+        [JsonIgnore]
         public int FittedCount
         {
-            get { return Slots.Count; }
+            get { return Slots == null ? 0 : Slots.Count; }
         }
 
+        [JsonIgnore]
         public int StoredCount
         {
-            get { return Storage.Values.Sum(rack => rack.Count(code => !string.IsNullOrEmpty(code))); }
+            get { return Storage == null ? 0 : Storage.Values.Where(rack => rack != null).Sum(rack => rack.Count(code => !string.IsNullOrEmpty(code))); }
         }
     }
 
@@ -78,6 +108,8 @@ namespace VoidCrewShipCustomizer
 
         private const int MaxRememberedRuns = 50;
         private static StoreFile _file;
+        /// <summary>The file is there but couldn't be read: it is never overwritten this session.</summary>
+        private static bool _readOnly;
 
         public static string Folder
         {
@@ -94,25 +126,19 @@ namespace VoidCrewShipCustomizer
             get
             {
                 if (_file != null) return _file;
-                try
+                string text;
+                if (SafeFile.Read(FilePath, out text) == SafeFile.ReadResult.Unreadable) _readOnly = true;
+                else if (text != null)
                 {
-                    if (System.IO.File.Exists(FilePath))
-                    {
-                        _file = JsonConvert.DeserializeObject<StoreFile>(System.IO.File.ReadAllText(FilePath));
-                        Log.Info("Loaded your Custom loadouts from " + FilePath + ".");
-                    }
-                }
-                catch (Exception e)
-                {
-                    string broken = FilePath + ".broken";
-                    Log.Error("Could not read " + FilePath + ", so the Custom loadouts start fresh. The old file is kept as " + broken + ". Details: " + e.Message);
                     try
                     {
-                        System.IO.File.Copy(FilePath, broken, true);
+                        _file = JsonConvert.DeserializeObject<StoreFile>(text);
+                        Log.Info("Loaded your Custom loadouts from " + FilePath + ".");
                     }
-                    catch
+                    catch (Exception e)
                     {
-                        // nothing more to do
+                        Log.Error("Could not understand " + FilePath + ", so the Custom loadouts start fresh. The old file is kept as " + FilePath + ".broken. Details: " + e.Message);
+                        SafeFile.KeepBroken(FilePath);
                     }
                 }
                 if (_file == null) _file = new StoreFile();
@@ -171,13 +197,15 @@ namespace VoidCrewShipCustomizer
 
         public static void Save()
         {
+            StoreFile file = File;
+            if (_readOnly)
+            {
+                Log.WarnOnce("store read only", "Your Custom loadouts are not saved this session: " + FilePath + " could not be read when the game started.");
+                return;
+            }
             try
             {
-                Directory.CreateDirectory(Folder);
-                string temp = FilePath + ".tmp";
-                System.IO.File.WriteAllText(temp, JsonConvert.SerializeObject(File, Formatting.Indented));
-                if (System.IO.File.Exists(FilePath)) System.IO.File.Delete(FilePath);
-                System.IO.File.Move(temp, FilePath);
+                SafeFile.Write(FilePath, JsonConvert.SerializeObject(file, Formatting.Indented));
             }
             catch (Exception e)
             {
@@ -197,8 +225,14 @@ namespace VoidCrewShipCustomizer
                 if (socket == null || socket.Module == null || socket.Module.IsNull) continue;
                 if (socket.SocketId < 0 || socket.SocketId >= hull.Sockets.Count) continue;
                 Option option = Catalog.OptionFor(socket);
-                if (option != null) config.Slots[socket.SocketId] = option.Code;
-                else Log.Warn("The " + config.CopiedFrom + " loadout has a module the customizer doesn't know (" + socket + "); it is left out of the copy.");
+                if (option == null)
+                {
+                    Log.Warn("The " + config.CopiedFrom + " loadout has a module the customizer doesn't know (" + socket + "); it is left out of the copy.");
+                    continue;
+                }
+                config.Slots[socket.SocketId] = option.Code;
+                // What the loadout loads into it (ammo, power cells, mods), exactly.
+                if (socket.Upgrades != null && socket.Upgrades.Any(u => u != null && !u.IsNull)) config.Contents[socket.SocketId] = socket.Upgrades.Select(Catalog.CodeFor).ToList();
             }
 
             foreach (ShelfInfo shelf in hull.Shelves)
@@ -240,9 +274,13 @@ namespace VoidCrewShipCustomizer
 
         // ---------------------------------------------------------------- runs started with a Custom loadout
 
+        /// <summary>Remembers a run as a CUSTOM run, moving it to the newest end of the list if it is there already.</summary>
         public static void RememberCustomRun(string gameSessionId)
         {
-            if (string.IsNullOrEmpty(gameSessionId) || File.CustomRuns.Contains(gameSessionId)) return;
+            if (string.IsNullOrEmpty(gameSessionId)) return;
+            int at = File.CustomRuns.IndexOf(gameSessionId);
+            if (at >= 0 && at == File.CustomRuns.Count - 1) return;
+            if (at >= 0) File.CustomRuns.RemoveAt(at);
             File.CustomRuns.Add(gameSessionId);
             while (File.CustomRuns.Count > MaxRememberedRuns) File.CustomRuns.RemoveAt(0);
             Save();

@@ -33,6 +33,8 @@ namespace VoidCrewShipCustomizer
         }
 
         private static SavedFile _file;
+        /// <summary>The file is there but couldn't be read: it is never overwritten this session.</summary>
+        private static bool _readOnly;
 
         private static string FilePath
         {
@@ -44,21 +46,18 @@ namespace VoidCrewShipCustomizer
             get
             {
                 if (_file != null) return _file;
-                try
+                string text;
+                if (SafeFile.Read(FilePath, out text) == SafeFile.ReadResult.Unreadable) _readOnly = true;
+                else if (text != null)
                 {
-                    if (System.IO.File.Exists(FilePath)) _file = JsonConvert.DeserializeObject<SavedFile>(System.IO.File.ReadAllText(FilePath));
-                }
-                catch (Exception e)
-                {
-                    string broken = FilePath + ".broken";
-                    Log.Error("Could not read " + FilePath + ", so there are no saved loadouts. The old file is kept as " + broken + ". Details: " + e.Message);
                     try
                     {
-                        System.IO.File.Copy(FilePath, broken, true);
+                        _file = JsonConvert.DeserializeObject<SavedFile>(text);
                     }
-                    catch
+                    catch (Exception e)
                     {
-                        // nothing more to do
+                        Log.Error("Could not understand " + FilePath + ", so there are no saved loadouts. The old file is kept as " + FilePath + ".broken. Details: " + e.Message);
+                        SafeFile.KeepBroken(FilePath);
                     }
                 }
                 _file = Normalize(_file);
@@ -125,13 +124,15 @@ namespace VoidCrewShipCustomizer
 
         private static void Write()
         {
+            SavedFile file = File;
+            if (_readOnly)
+            {
+                Log.WarnOnce("saved read only", "Your saved loadouts are not saved this session: " + FilePath + " could not be read when the game started.");
+                return;
+            }
             try
             {
-                Directory.CreateDirectory(LoadoutStore.Folder);
-                string temp = FilePath + ".tmp";
-                System.IO.File.WriteAllText(temp, JsonConvert.SerializeObject(File, Formatting.Indented));
-                if (System.IO.File.Exists(FilePath)) System.IO.File.Delete(FilePath);
-                System.IO.File.Move(temp, FilePath);
+                SafeFile.Write(FilePath, JsonConvert.SerializeObject(file, Formatting.Indented));
             }
             catch (Exception e)
             {

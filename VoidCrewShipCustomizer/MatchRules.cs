@@ -210,6 +210,12 @@ namespace VoidCrewShipCustomizer
             public Option Option;
             /// <summary>For the fabricator's level and the alloys: what the ship starts with instead.</summary>
             public string Instead;
+            /// <summary>Where it is, to go there: a hardpoint position, or a rack (core system) and slot; -1 when neither.</summary>
+            public int Hardpoint = -1;
+            public int Rack = -1;
+            public int Slot = -1;
+            /// <summary>The loadout part it is in (see LayoutMerge).</summary>
+            public string Part;
         }
 
         /// <summary>
@@ -227,8 +233,26 @@ namespace VoidCrewShipCustomizer
                 Option option = null;
                 string why = Catalog.TryGetOption(slot.Value, out option) ? WhyRefused(option) : null;
                 if (why == null) continue;
-                issues.Add(new Issue { Name = RichText.Plain(option.Name), Where = "HARDPOINT", Why = why, Option = option });
-                if (fix) config.Slots.Remove(slot.Key);
+                issues.Add(new Issue { Name = RichText.Plain(option.Name), Where = HardpointName(hull, slot.Key), Why = why, Option = option, Hardpoint = slot.Key });
+                if (fix)
+                {
+                    config.Slots.Remove(slot.Key);
+                    config.Contents.Remove(slot.Key);
+                }
+            }
+
+            // What the modules are loaded with, where the loadout chooses it (their usual contents keep to the rules by themselves).
+            foreach (KeyValuePair<int, List<string>> inside in config.Contents.ToList())
+            {
+                if (inside.Value == null) continue;
+                for (int i = 0; i < inside.Value.Count; i++)
+                {
+                    Option option = null;
+                    string why = !string.IsNullOrEmpty(inside.Value[i]) && Catalog.TryGetOption(inside.Value[i], out option) ? WhyRefused(option) : null;
+                    if (why == null) continue;
+                    issues.Add(new Issue { Name = RichText.Plain(option.Name), Where = HardpointName(hull, inside.Key) + " · LOADED", Why = why, Option = option, Hardpoint = inside.Key });
+                    if (fix) inside.Value[i] = "";
+                }
             }
 
             foreach (ShelfInfo shelf in hull.Shelves)
@@ -240,7 +264,7 @@ namespace VoidCrewShipCustomizer
                     Option option = null;
                     string why = !string.IsNullOrEmpty(codes[i]) && Catalog.TryGetOption(codes[i], out option) ? WhyRefused(option) : null;
                     if (why == null) continue;
-                    issues.Add(new Issue { Name = RichText.Plain(option.Name), Where = shelf.Name + " · SLOT " + (i + 1), Why = why, Option = option });
+                    issues.Add(new Issue { Name = RichText.Plain(option.Name), Where = shelf.Name + " · SLOT " + (i + 1), Why = why, Option = option, Rack = shelf.CoreIndex, Slot = i });
                     if (fix) codes[i] = "";
                 }
             }
@@ -249,7 +273,7 @@ namespace VoidCrewShipCustomizer
             string homunculusWhy = !string.IsNullOrEmpty(config.Homunculus) && Catalog.TryGetOption(config.Homunculus, out homunculus) ? WhyRefused(homunculus) : null;
             if (homunculusWhy != null)
             {
-                issues.Add(new Issue { Name = RichText.Plain(homunculus.Name), Where = "HOMUNCULUS", Why = homunculusWhy, Option = homunculus });
+                issues.Add(new Issue { Name = RichText.Plain(homunculus.Name), Where = "HOMUNCULUS", Why = homunculusWhy, Option = homunculus, Part = LayoutMerge.Homunculus });
                 if (fix) config.Homunculus = "";
             }
 
@@ -261,6 +285,7 @@ namespace VoidCrewShipCustomizer
                     Name = "FABRICATOR " + CustomLoadouts.FabricatorLevelName(config.FabricatorLevel),
                     Where = "FABRICATOR",
                     Why = "This match's fabricators go up to " + CustomLoadouts.FabricatorLevelName(level) + ".",
+                    Part = LayoutMerge.Fabricator,
                     Instead = "its fabricator at " + CustomLoadouts.FabricatorLevelName(level) + " (not " + CustomLoadouts.FabricatorLevelName(config.FabricatorLevel) + ")"
                 });
                 if (fix) config.FabricatorLevel = level;
@@ -274,11 +299,18 @@ namespace VoidCrewShipCustomizer
                     Name = config.Alloys + " ALLOYS",
                     Where = "FABRICATOR",
                     Why = alloys < 0 ? "This match starts with the game's own alloys." : "This match allows up to " + alloys + " starting alloys.",
+                    Part = LayoutMerge.Alloys,
                     Instead = (alloys < 0 ? "the game's own alloys" : alloys + " alloys") + " (not " + config.Alloys + ")"
                 });
                 if (fix) config.Alloys = alloys;
             }
             return issues;
+        }
+
+        /// <summary>"HARDPOINT 3": hardpoints are numbered by their group (overlapping positions are one hardpoint).</summary>
+        private static string HardpointName(HullInfo hull, int position)
+        {
+            return position >= 0 && position < hull.Sockets.Count ? "HARDPOINT " + (hull.Sockets[position].Group + 1) : "HARDPOINT";
         }
 
         /// <summary>

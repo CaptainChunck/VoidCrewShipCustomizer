@@ -105,6 +105,7 @@
     <Compile Include="FleetLink.cs" />
     <Compile Include="GameDataReport.cs" />
     <Compile Include="Hardpoints.cs" />
+    <Compile Include="LayoutMerge.cs" />
     <Compile Include="LoadoutStore.cs" />
     <Compile Include="Log.cs" />
     <Compile Include="MatchRules.cs" />
@@ -116,6 +117,7 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="RichText.cs" />
     <Compile Include="RoomSync.cs" />
+    <Compile Include="SafeFile.cs" />
     <Compile Include="SavedLoadouts.cs" />
     <Compile Include="Settings.cs" />
     <Compile Include="ShipCustomizerApi.cs" />
