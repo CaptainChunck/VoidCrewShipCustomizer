@@ -18,8 +18,9 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
      materials, animus crates, weapon crates, mods or relics).
    - **HOMUNCULUS** picks the standard homunculus or any Blessed Homunculus.
    - **FABRICATOR** sets how many alloys the run starts with, and the fabricator's level (MK I to MK III).
-   - **COPY LOADOUT** starts from any of the game's loadouts, including the challenge ones.
-   - **EMPTY** clears the hardpoints, the racks, or everything.
+   - **SAVE LOADOUT** keeps the loadout on your PC (10 slots per ship) to bring back in any later match.
+   - **LOAD LOADOUT** brings back a saved loadout, starts from any of the game's loadouts (challenge ones included), or
+     empties the hardpoints, the racks, or everything.
 4. Press **SELECT** and start a mission as usual.
 
 Your CUSTOM loadouts are saved per ship and kept between sessions.
@@ -42,8 +43,9 @@ Ship Customizer follows Void Crew's official modding guidelines for sandbox mods
 ## Works with Void Crew Fleet
 
 With Void Crew Fleet installed, its second ship can use CUSTOM too. Under SHIP 2 the terminal shows ship 2's CUSTOM
-loadout: the same as ship 1's until you change it there. COPY LOADOUT has SAME AS SHIP 1 to go back. Ship 2's fabricator
-gets its own level and, with a Void Crew Fleet that supports it, its own starting alloys (otherwise both ships start with
+loadout: the same as ship 1's until you change it there. LOAD LOADOUT has SAME AS SHIP 1 to go back. Choose CUSTOM with
+SELECT under SHIP 2 for ship 2 to use it; left AS SHIP 1, ship 2 starts as a copy of ship 1. Ship 2's fabricator gets its
+own level and, with Void Crew Fleet 0.2.1 or newer, its own starting alloys (with an older Fleet, both ships start with
 ship 1's). Any player can set ship 2 up, and the same rules apply to both ships.
 
 In a **Fleet Battle** (PvP), ship 1 belongs to the BLUE team and ship 2 to the RED team: only a ship's own team can change

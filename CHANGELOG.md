@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0
+
+- **SAVE LOADOUT** and **LOAD LOADOUT**:
+  - Keep a CUSTOM loadout on your PC (10 slots per ship) and bring it back in any later match, as the host or as
+    another player.
+  - LOAD LOADOUT also has the game's loadouts (what COPY LOADOUT did) and the EMPTY options.
+- The pop-up windows (the pickers and the storage racks) are built like the game's own pop-ups: its dark-grey window
+  with the light-blue outline and wings, the LOADOUTS list's rows, and its buttons. In a Fleet Battle the outline takes
+  the team's colour.
+- **Storage racks start with exactly what you chose.**
+  - The CUSTOM ship gets fresh rack entries (nothing left over from the loadout it's built on).
+  - Right after it spawns, the host checks every rack slot and puts back the chosen item if a slot holds anything else.
+    The log names any slot it had to fix.
+  - With Void Crew Fleet, ship 2 uses its own CUSTOM only when CUSTOM is chosen (SELECT) under SHIP 2; set to AS SHIP 1,
+    it starts as a copy of ship 1.
+
 ## 0.5.1
 
 - With Void Crew Fleet, ship 2's FABRICATOR menu has ALLOYS too, so ship 2 (the RED team's ship in a Fleet Battle) can

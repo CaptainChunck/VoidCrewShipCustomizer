@@ -95,6 +95,7 @@ internal static class Program
         Method("CG.Cloud.CloudPlayerProfileDataSync", "AddQuestProgress");
         Method("CG.Profile.PhotonPlayerDataSync", "AddQuestProgress");
         Method("CG.Ship.Hull.CarryablesSocket", "DoesAccept", "carryable");
+        Method("ShipLoadout", "InitializeShip", "Position", "Rotation");
 
         Console.WriteLine("Fields read by name (Harmony ___field injection and reflection):");
         Field("UI.ShipLoadoutTerminal.ModuleLayout", "slots", "System.Collections.Generic.List`1<UI.PowerTerminal.SlotVE>");
@@ -323,6 +324,25 @@ internal static class Program
         config.GetMethod("Normalized").Invoke(older, null);
         Check((int)config.GetField("Alloys").GetValue(older) == 100000 && (int)config.GetField("FabricatorLevel").GetValue(older) == 2,
             "alloys and fabricator level are kept in range (at most 100000 and MK III)");
+
+        // 0.6.0: saved loadouts (numbered slots per ship type, in saved-loadouts.json).
+        Type savedFile = plugin.GetType("VoidCrewShipCustomizer.SavedLoadouts+SavedFile", true);
+        Type saved = plugin.GetType("VoidCrewShipCustomizer.SavedLoadouts+Saved", true);
+        string savedJson = "{\"Version\":1,\"Ships\":{\"4bc2ff9e1d156c94a9c94286a7aaa79b\":[" +
+                           "{\"Slot\":0,\"Config\":{}},{\"Slot\":3,\"SavedAt\":\"first\",\"Config\":{}},{\"Slot\":3,\"SavedAt\":\"second\",\"Config\":{\"Alloys\":500}}," +
+                           "{\"Slot\":11,\"Config\":{}},{\"Slot\":5},null]," +
+                           "\"ac98ae5eb3b940747b0fbb7bd616b019\":null}}";
+        object loadedSaves = plugin.GetType("VoidCrewShipCustomizer.SavedLoadouts", true).GetMethod("Normalize")
+            .Invoke(null, new[] { deserialize.Invoke(null, new object[] { savedJson, savedFile }) });
+        var savedShips = (IDictionary)savedFile.GetField("Ships").GetValue(loadedSaves);
+        var destroyerSaves = (IList)savedShips["4bc2ff9e1d156c94a9c94286a7aaa79b"];
+        Check(destroyerSaves.Count == 1 && (int)saved.GetField("Slot").GetValue(destroyerSaves[0]) == 3 && (string)saved.GetField("SavedAt").GetValue(destroyerSaves[0]) == "second",
+            "saved loadouts keep slots 1 to 10 with a loadout, the last one for a slot");
+        Check((int)config.GetField("Alloys").GetValue(saved.GetField("Config").GetValue(destroyerSaves[0])) == 500 &&
+              ((IList)savedShips["ac98ae5eb3b940747b0fbb7bd616b019"]).Count == 0,
+            "a saved loadout keeps its contents; a ship with nothing saved has an empty list");
+        object savedAgain = deserialize.Invoke(null, new object[] { (string)serialize.Invoke(null, new[] { loadedSaves }), savedFile });
+        Check(((IList)((IDictionary)savedFile.GetField("Ships").GetValue(savedAgain))["4bc2ff9e1d156c94a9c94286a7aaa79b"]).Count == 1, "saved loadouts survive a save and load");
 
         // 0.5.0: other players' changes are saved on the host's PC, so only what the ship has is kept.
         Console.WriteLine("Changes from other players:");

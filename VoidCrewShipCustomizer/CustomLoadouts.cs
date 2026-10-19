@@ -2,7 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using CG;
 using CG.Game;
+using CG.Network;
+using CG.Objects;
+using CG.Ship.Hull;
 using CG.Ship.Modules;
 using CG.Space;
 using CG.UI.MainMenu;
@@ -475,19 +479,18 @@ namespace VoidCrewShipCustomizer
             {
                 List<string> codes;
                 config.Storage.TryGetValue(shelf.CoreIndex, out codes);
-                ShipSocketEntry rack = loadout.CoreSystemSockets.FirstOrDefault(c => c != null && c.SocketId == shelf.CoreIndex);
-                if (rack == null)
+                // A fresh entry per rack, so nothing of the base loadout's racks is left over: the game fills each rack slot
+                // from exactly one entry, and its module must be the rack's own (or the game skips the whole rack).
+                loadout.CoreSystemSockets.RemoveAll(c => c != null && c.SocketId == shelf.CoreIndex);
+                if (!Catalog.CanSpawn(shelf.ModuleGuid)) continue;
+                var rack = new ShipSocketEntry
                 {
-                    if (!Catalog.CanSpawn(shelf.ModuleGuid)) continue;
-                    rack = new ShipSocketEntry
-                    {
-                        SocketId = shelf.CoreIndex,
-                        Module = new GameObjectRef(new ResourceAssetRef(shelf.ModuleGuid)),
-                        BuildBox = new CarryableRef(),
-                        Upgrades = new ShipAssetRef[0]
-                    };
-                    loadout.CoreSystemSockets.Add(rack);
-                }
+                    SocketId = shelf.CoreIndex,
+                    Module = new GameObjectRef(new ResourceAssetRef(shelf.ModuleGuid)),
+                    BuildBox = new CarryableRef(),
+                    Upgrades = new ShipAssetRef[0]
+                };
+                loadout.CoreSystemSockets.Add(rack);
                 var items = new ShipAssetRef[shelf.Slots.Count];
                 for (int i = 0; i < items.Length; i++)
                 {
@@ -663,6 +666,7 @@ namespace VoidCrewShipCustomizer
             }
             HullConfig config = LoadoutStore.Get(hull, 2);
             ShipLoadout loadout = Build(hull, config);
+            RememberRacks(hull, loadout);
             // Continuing a saved run, the game puts the fabricators back as they were.
             if (!_missionIsSavedRun) PendingFabricatorLevels[1] = config.FabricatorLevel;
             _ship2CustomRun = true;
@@ -709,6 +713,7 @@ namespace VoidCrewShipCustomizer
                     {
                         HullConfig config = LoadoutStore.Get(hull);
                         session.ToLoadShipData = Build(hull, config);
+                        RememberRacks(hull, session.ToLoadShipData);
                         // The game's own starting amount for the run (-1 means its usual bonus from the players' ranks).
                         if (config.Alloys >= 0) session.InitialAlloys = config.Alloys;
                         PendingFabricatorLevels[0] = config.FabricatorLevel;
@@ -745,6 +750,88 @@ namespace VoidCrewShipCustomizer
             if (ModdingUtils.IsCurrentSessionModded()) return true;
             ModdingUtils.RegisterSessionMod();
             return ModdingUtils.IsCurrentSessionModded();
+        }
+
+        // ---------------------------------------------------------------- the storage racks, checked after spawning
+
+        /// <summary>A CUSTOM ship this mission spawns: which core systems are its racks, and what they hold.</summary>
+        private sealed class RackPlan
+        {
+            public string Hull;
+            public HashSet<int> Racks;
+            public string Signature;
+        }
+
+        private static readonly List<RackPlan> RackPlans = new List<RackPlan>();
+
+        /// <summary>Host, at mission start: remembers what a CUSTOM ship's racks hold, to check them once it has spawned.</summary>
+        private static void RememberRacks(HullInfo hull, ShipLoadout loadout)
+        {
+            var racks = new HashSet<int>(hull.Shelves.Select(s => s.CoreIndex));
+            RackPlans.Add(new RackPlan { Hull = hull.Name, Racks = racks, Signature = RackSignature(loadout, racks) });
+        }
+
+        /// <summary>The racks of a loadout as text ("core index=item,item,-;..."), to recognise it again (also when copied).</summary>
+        private static string RackSignature(ShipLoadout loadout, HashSet<int> racks)
+        {
+            var parts = new List<string>();
+            foreach (ShipSocketEntry rack in loadout.CoreSystemSockets.Where(c => c != null && racks.Contains(c.SocketId)).OrderBy(c => c.SocketId))
+            {
+                IEnumerable<string> items = (rack.Upgrades ?? new ShipAssetRef[0]).Select(u => u == null || u.IsNull ? "-" : u.AssetRef.AssetGuid.AsHex());
+                parts.Add(rack.SocketId + "=" + string.Join(",", items.ToArray()));
+            }
+            return string.Join(";", parts.ToArray());
+        }
+
+        /// <summary>
+        /// Host, right after the game spawned a ship from one of this mission's CUSTOM loadouts (ship 1, ship 2, or Void Crew
+        /// Fleet's copy of ship 1, recognised by its racks): every rack slot must hold what the CUSTOM loadout puts there.
+        /// The game fills racks only from the loadout, but if a slot ends up with something else (or an empty slot with
+        /// anything), that item is replaced by the chosen one and the log says so.
+        /// </summary>
+        public static void CheckRacksAfterSpawn(ShipLoadout loadout, PlayerControlledShip ship)
+        {
+            if (!PhotonNetwork.IsMasterClient || loadout == null || ship == null || ship.CoreSystems == null || RackPlans.Count == 0) return;
+            RackPlan plan = RackPlans.FirstOrDefault(p => RackSignature(loadout, p.Racks) == p.Signature);
+            if (plan == null) return;
+            int replaced = 0;
+            foreach (ShipSocketEntry rack in loadout.CoreSystemSockets.Where(c => c != null && plan.Racks.Contains(c.SocketId) && c.Upgrades != null))
+            {
+                CellModule module = ship.CoreSystems.ElementAtOrDefault(rack.SocketId);
+                if (module == null) continue;
+                List<CarryablesSocket> sockets = module.CarryablesSockets.ToList();
+                for (int k = 0; k < sockets.Count && k < rack.Upgrades.Length; k++)
+                {
+                    CarryablesSocket socket = sockets[k];
+                    if (socket == null) continue;
+                    ShipAssetRef wanted = rack.Upgrades[k];
+                    GUIDUnion wantedGuid = wanted != null && !wanted.IsNull ? wanted.AssetRef.AssetGuid : GUIDUnion.Empty();
+                    CarryableObject current = socket.Payload;
+                    GUIDUnion currentGuid = current != null ? current.assetGuid : GUIDUnion.Empty();
+                    if (currentGuid == wantedGuid) continue;
+                    Log.Warn("The " + plan.Hull + "'s storage rack slot " + (k + 1) + " (core system " + rack.SocketId + ") held " +
+                             (current != null ? NameOfItem(currentGuid) : "nothing") + " instead of " + (wantedGuid.IsNull ? "nothing" : NameOfItem(wantedGuid)) + "; fixing it.");
+                    if (current != null) socket.DestroyStoredCarryable();
+                    if (!wantedGuid.IsNull) PutInSlot(socket, wantedGuid, wanted.ExtraData);
+                    replaced++;
+                }
+            }
+            if (replaced > 0) Log.Warn("Put " + replaced + " storage rack slot(s) of the " + plan.Hull + " back to its CUSTOM loadout.");
+        }
+
+        private static void PutInSlot(CarryablesSocket socket, GUIDUnion item, JObject extraData)
+        {
+            var data = new Dictionary<byte, object> { { 1, socket.photonView.ViewID } };
+            if (extraData != null) data.Add(0, extraData.ToString(Newtonsoft.Json.Formatting.None));
+            AbstractCloneStarObject spawned = ObjectFactory.InstantiateSpaceObjectByGUID(item, socket.WorldPosition, socket.WorldRotation, data);
+            CarryableObject carryable = spawned != null ? spawned.GetComponent<CarryableObject>() : null;
+            if (carryable != null) socket.TryInsertCarryable(carryable);
+        }
+
+        private static string NameOfItem(GUIDUnion guid)
+        {
+            Option option;
+            return Catalog.TryGetOption("i:" + guid.AsHex(), out option) ? option.Name : guid.AsHex();
         }
 
         // ---------------------------------------------------------------- the fabricators' starting level
@@ -801,6 +888,19 @@ namespace VoidCrewShipCustomizer
             }
         }
 
+        /// <summary>A short line for lists: "12 modules  ·  32 items  ·  500 alloys  ·  fabricator MK III".</summary>
+        public static string Summary(HullConfig config)
+        {
+            var parts = new List<string>
+            {
+                config.FittedCount + (config.FittedCount == 1 ? " module" : " modules"),
+                config.StoredCount + (config.StoredCount == 1 ? " item" : " items")
+            };
+            if (config.Alloys >= 0) parts.Add(config.Alloys + " alloys");
+            if (config.FabricatorLevel > 0) parts.Add("fabricator " + FabricatorLevelName(config.FabricatorLevel));
+            return string.Join("  ·  ", parts.ToArray());
+        }
+
         public static string FabricatorLevelName(int level)
         {
             return level == 2 ? "MK III" : (level == 1 ? "MK II" : "MK I");
@@ -812,6 +912,7 @@ namespace VoidCrewShipCustomizer
             _ship2CustomRun = false;
             PendingFabricatorLevels[0] = PendingFabricatorLevels[1] = 0;
             _shipSeenAt = -1f;
+            RackPlans.Clear();
             if (!PhotonNetwork.IsMasterClient || ResumeShip.IsNull || manager == null) return;
             GUIDUnion ship = ResumeShip;
             ResumeShip = GUIDUnion.Empty();

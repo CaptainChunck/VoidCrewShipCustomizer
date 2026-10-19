@@ -58,6 +58,7 @@ namespace VoidCrewShipCustomizer
         public static void OnTerminalDisplayed(LoadoutTerminal terminal, ShipLoadoutDataDef def, VisualElement root)
         {
             _terminal = terminal;
+            if (terminal != null && terminal.ListEntryPrefab != null) Ui.ListEntryTemplate = terminal.ListEntryPrefab;
             if (root != null) _root = root;
             _shown = def;
             HullInfo hull;
@@ -444,16 +445,17 @@ namespace VoidCrewShipCustomizer
             else if (CustomLoadouts.TerminalShip == 2) notes.Add("SHIP 2");
             if (!editable) notes.Add("VIEW ONLY");
             else if (CustomLoadouts.EditsGoToHost(hull) || RoomSync.SharingLayouts) notes.Add("SHARED");
-            AddToolbarHeader("CUSTOM", string.Join(" · ", notes.ToArray()), FrameColor());
+            AddToolbarHeader("CUSTOM", string.Join(" · ", notes.ToArray()), TeamColor() ?? Ui.Gold);
             AddToolbarButton("HARDPOINTS", () => OpenHardpointList(hull));
             AddToolbarButton("STORAGE (" + config.StoredCount + ")", () => OpenStorage(hull));
             if (editable)
             {
                 AddToolbarButton("HOMUNCULUS", () => OpenHomunculusPicker(hull));
                 AddToolbarButton("FABRICATOR", () => OpenFabricatorPicker(hull));
-                AddToolbarButton("COPY LOADOUT", () => OpenCopyPicker(hull, false));
-                AddToolbarButton("EMPTY", () => OpenEmptyPicker(hull));
             }
+            // Saving keeps a copy on this PC, so it works on a loadout this player may only look at, too.
+            AddToolbarButton("SAVE LOADOUT", () => OpenSavePicker(hull));
+            if (editable) AddToolbarButton("LOAD LOADOUT", () => OpenLoadPicker(hull, false));
             if (_toolbar.parent != host)
             {
                 _toolbar.RemoveFromHierarchy();
@@ -472,11 +474,10 @@ namespace VoidCrewShipCustomizer
         private const float ToolbarHeaderHeight = 52f;
         private const float ToolbarButtonHeight = 30f;
 
-        /// <summary>Gold, or in a Void Crew Fleet battle the team colour of the ship the terminal is setting up.</summary>
-        private static Color FrameColor()
+        /// <summary>In a Void Crew Fleet battle, the team colour of the ship the terminal is setting up; otherwise null.</summary>
+        private static Color? TeamColor()
         {
-            Color? team = FleetLink.ShipColor(CustomLoadouts.TerminalShip);
-            return team.HasValue ? team.Value : Ui.Gold;
+            return FleetLink.ShipColor(CustomLoadouts.TerminalShip);
         }
 
         /// <summary>The section header, styled like the terminal's own (its classes), with the game's decorative line under it.</summary>
@@ -674,7 +675,64 @@ namespace VoidCrewShipCustomizer
             };
         }
 
-        private static void OpenCopyPicker(HullInfo hull, bool storageOnly)
+        /// <summary>
+        /// Saves the CUSTOM loadout the terminal shows in one of this player's numbered slots for this ship type, to load
+        /// again in a later match. Slots replace what they held (marked REPLACE); the CLEAR tab empties one.
+        /// </summary>
+        private static void OpenSavePicker(HullInfo hull)
+        {
+            var entries = new List<PickerPanel.Entry>();
+            for (int slot = 1; slot <= SavedLoadouts.SlotCount; slot++)
+            {
+                int chosen = slot;
+                SavedLoadouts.Saved saved = SavedLoadouts.Get(hull, slot);
+                entries.Add(new PickerPanel.Entry
+                {
+                    Name = "SLOT " + slot,
+                    Detail = saved != null ? SavedDetail(saved) : "Empty",
+                    Category = "SAVE",
+                    Tag = saved != null ? "REPLACE" : "SAVE HERE",
+                    TagColor = saved != null ? Orange : Ui.Gold,
+                    OnPick = () => SaveToSlot(hull, chosen)
+                });
+            }
+            foreach (SavedLoadouts.Saved saved in SavedLoadouts.All(hull))
+            {
+                int chosen = saved.Slot;
+                entries.Add(new PickerPanel.Entry
+                {
+                    Name = "CLEAR SLOT " + saved.Slot,
+                    Detail = SavedDetail(saved),
+                    Category = "CLEAR",
+                    OnPick = () =>
+                    {
+                        SavedLoadouts.Clear(hull, chosen);
+                        Toast("Slot " + chosen + " is empty again.");
+                    }
+                });
+            }
+            OpenPicker("SAVE LOADOUT · " + hull.Name.ToUpperInvariant(),
+                "Keep this CUSTOM loadout on your PC, then bring it back in any later match with LOAD LOADOUT (on a " + hull.Name + ").",
+                entries, "SAVE");
+        }
+
+        private static void SaveToSlot(HullInfo hull, int slot)
+        {
+            HullConfig config = CustomLoadouts.ConfigToShow(hull);
+            SavedLoadouts.Save(hull, slot, config);
+            Toast("Saved to slot " + slot + ": " + CustomLoadouts.Summary(config) + ".");
+        }
+
+        private static string SavedDetail(SavedLoadouts.Saved saved)
+        {
+            return "Saved " + saved.SavedAt + "  ·  " + CustomLoadouts.Summary(saved.Config);
+        }
+
+        /// <summary>
+        /// Replaces the CUSTOM loadout (or only its storage racks) with one this player saved, one of the game's loadouts,
+        /// or an empty ship; with Void Crew Fleet's ship 2, also ship 1's.
+        /// </summary>
+        private static void OpenLoadPicker(HullInfo hull, bool storageOnly)
         {
             var entries = new List<PickerPanel.Entry>();
             if (CustomLoadouts.TerminalShip == 2)
@@ -708,6 +766,28 @@ namespace VoidCrewShipCustomizer
                     OnPick = () => Edit(hull, c => CopyInto(c, LoadoutStore.Get(hull, CustomLoadouts.TerminalShip).Clone(), storageOnly, "your own CUSTOM"))
                 });
             }
+            List<SavedLoadouts.Saved> savedLoadouts = SavedLoadouts.All(hull);
+            foreach (SavedLoadouts.Saved saved in savedLoadouts)
+            {
+                SavedLoadouts.Saved chosen = saved;
+                entries.Add(new PickerPanel.Entry
+                {
+                    Name = "SLOT " + saved.Slot,
+                    Detail = SavedDetail(saved),
+                    Category = "SAVED",
+                    OnPick = () => Edit(hull, c => CopyInto(c, chosen.Config.Clone(), storageOnly, "saved loadout " + chosen.Slot))
+                });
+            }
+            if (savedLoadouts.Count == 0)
+            {
+                entries.Add(new PickerPanel.Entry
+                {
+                    Name = "NOTHING SAVED YET",
+                    Detail = "Use SAVE LOADOUT to keep a CUSTOM loadout of this ship on your PC.",
+                    Category = "SAVED",
+                    Enabled = false
+                });
+            }
             foreach (ShipLoadoutDataDef preset in hull.Presets)
             {
                 ShipLoadoutDataDef def = preset;
@@ -738,9 +818,27 @@ namespace VoidCrewShipCustomizer
                     })
                 });
             }
-            OpenPicker(storageOnly ? "COPY STORAGE RACKS" : "COPY A LOADOUT",
-                storageOnly ? "Start the racks with what one of the game's loadouts carries." : "Replace your CUSTOM loadout with a copy of one of the game's loadouts, then change what you like.",
-                entries, null);
+            if (!storageOnly)
+            {
+                entries.Add(new PickerPanel.Entry { Name = "EMPTY ALL HARDPOINTS", Detail = "Take every module and weapon off the ship.", Category = "EMPTY", OnPick = () => Edit(hull, c => c.Slots.Clear()) });
+                entries.Add(new PickerPanel.Entry { Name = "EMPTY ALL STORAGE RACKS", Detail = "Start with nothing on the racks.", Category = "EMPTY", OnPick = () => Edit(hull, EmptyStorage) });
+                entries.Add(new PickerPanel.Entry
+                {
+                    Name = "EMPTY EVERYTHING",
+                    Detail = "No modules, nothing in storage, standard homunculus.",
+                    Category = "EMPTY",
+                    OnPick = () => Edit(hull, c =>
+                    {
+                        c.Slots.Clear();
+                        EmptyStorage(c);
+                        c.Homunculus = "";
+                    })
+                });
+            }
+            OpenPicker(storageOnly ? "LOAD STORAGE RACKS" : "LOAD LOADOUT",
+                storageOnly ? "Fill the racks from one of your saved loadouts or one of the game's loadouts."
+                            : "Replace your CUSTOM loadout with one you saved, one of the game's loadouts, or an empty ship, then change what you like.",
+                entries, savedLoadouts.Count > 0 ? "SAVED" : null);
         }
 
         /// <summary>Copies a whole CUSTOM loadout (fabricator included), or only its storage racks, into the one being changed.</summary>
@@ -753,27 +851,6 @@ namespace VoidCrewShipCustomizer
             target.Alloys = source.Alloys;
             target.FabricatorLevel = source.FabricatorLevel;
             target.CopiedFrom = name;
-        }
-
-        private static void OpenEmptyPicker(HullInfo hull)
-        {
-            var entries = new List<PickerPanel.Entry>
-            {
-                new PickerPanel.Entry { Name = "EMPTY ALL HARDPOINTS", Detail = "Take every module and weapon off the ship.", OnPick = () => Edit(hull, c => c.Slots.Clear()) },
-                new PickerPanel.Entry { Name = "EMPTY ALL STORAGE RACKS", Detail = "Start with nothing on the racks.", OnPick = () => Edit(hull, EmptyStorage) },
-                new PickerPanel.Entry
-                {
-                    Name = "EMPTY EVERYTHING",
-                    Detail = "No modules, nothing in storage, standard homunculus.",
-                    OnPick = () => Edit(hull, c =>
-                    {
-                        c.Slots.Clear();
-                        EmptyStorage(c);
-                        c.Homunculus = "";
-                    })
-                }
-            };
-            OpenPicker("EMPTY", "Clear part of your CUSTOM loadout.", entries, null);
         }
 
         private static void EmptyStorage(HullConfig config)
@@ -792,12 +869,12 @@ namespace VoidCrewShipCustomizer
             if (host == null) return;
             CloseOverlays();
             bool editable = CustomLoadouts.CanEdit(hull);
-            _storage = new StoragePanel(host, hull, () => CustomLoadouts.ConfigToShow(hull), editable, CustomLoadouts.WhyNotEditable(), FrameColor(),
+            _storage = new StoragePanel(host, hull, () => CustomLoadouts.ConfigToShow(hull), editable, CustomLoadouts.WhyNotEditable(), TeamColor(),
                 (shelf, index) => OpenItemPicker(hull, shelf, index),
                 action =>
                 {
                     if (action == "empty") Edit(hull, EmptyStorage);
-                    else if (action == "copy") OpenCopyPicker(hull, true);
+                    else if (action == "copy") OpenLoadPicker(hull, true);
                 });
         }
 
@@ -969,7 +1046,7 @@ namespace VoidCrewShipCustomizer
             if (host == null) return;
             if (closeOthers) CloseOverlays();
             else if (_picker != null) _picker.Close();
-            _picker = new PickerPanel(host, title, subtitle, entries, tab, FrameColor());
+            _picker = new PickerPanel(host, title, subtitle, entries, tab, TeamColor());
         }
 
         private static void CloseOverlays()
@@ -1011,11 +1088,11 @@ namespace VoidCrewShipCustomizer
                 _toast.style.left = new Length(22, LengthUnit.Percent);
                 _toast.style.right = new Length(22, LengthUnit.Percent);
                 _toast.style.top = new Length(3, LengthUnit.Percent);
-                _toast.style.backgroundColor = new Color(0f, 0f, 0f, 0.88f);
-                Ui.Border(_toast, 2, Ui.Gold);
-                Ui.Radius(_toast, 6);
+                // The game's pop-up colours: dark grey with the light-blue outline.
+                _toast.style.backgroundColor = new Color(0.188f, 0.188f, 0.188f, 0.96f);
+                Ui.Border(_toast, 2, new Color(0.741f, 0.906f, 0.984f, 1f));
                 Ui.Padding(_toast, 10, 16);
-                _toastLabel = Ui.Label("", 22, Ui.Text, true);
+                _toastLabel = Ui.GameText("", "ui-text-size__medium");
                 _toastLabel.style.unityTextAlign = TextAnchor.MiddleCenter;
                 _toast.Add(_toastLabel);
             }

@@ -1,6 +1,6 @@
 {
   "name": "Ship_Customizer",
-  "version_number": "0.5.1",
+  "version_number": "0.6.0",
   "website_url": "https://github.com/CaptainChunck/VoidCrewShipCustomizer",
   "description": "Adds a CUSTOM loadout to the ship loadout terminal: any weapon or module of any tier on every hardpoint, any item on the storage racks, the fabricator's alloys and level, and the homunculus. Sandbox: no progression.",
   "dependencies": [

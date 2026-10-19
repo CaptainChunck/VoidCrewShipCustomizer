@@ -49,66 +49,42 @@ namespace VoidCrewShipCustomizer
             get { return _backdrop.parent != null; }
         }
 
-        /// <param name="frame">The window's frame colour (gold, or a Void Crew Fleet team's colour in a Fleet Battle).</param>
-        public PickerPanel(VisualElement host, string title, string subtitle, List<Entry> entries, string initialTab, Color frame)
+        /// <param name="team">A Void Crew Fleet team's colour in a Fleet Battle (the frame and bars take it), otherwise null.</param>
+        public PickerPanel(VisualElement host, string title, string subtitle, List<Entry> entries, string initialTab, Color? team)
         {
             _host = host;
             _entries = entries;
 
             _backdrop = new VisualElement { name = "ShipCustomizerPicker" };
-            Ui.Fill(_backdrop);
-            _backdrop.style.backgroundColor = Ui.Backdrop;
             // Click outside the window to close; clicks inside stop at the window.
             _backdrop.RegisterCallback<PointerDownEvent>(e =>
             {
                 if (e.target == _backdrop) Close();
             });
-
-            var window = new VisualElement();
-            window.style.position = Position.Absolute;
-            window.style.left = new Length(17, LengthUnit.Percent);
-            window.style.right = new Length(17, LengthUnit.Percent);
-            window.style.top = new Length(7, LengthUnit.Percent);
-            window.style.bottom = new Length(7, LengthUnit.Percent);
-            window.style.backgroundColor = Ui.Window;
-            Ui.Border(window, 2, frame);
-            Ui.Radius(window, 6);
-            Ui.Padding(window, 14, 18);
-            window.style.flexDirection = FlexDirection.Column;
-            window.RegisterCallback<PointerDownEvent>(e => e.StopPropagation());
-            _backdrop.Add(window);
-
-            var header = new VisualElement();
-            header.style.flexDirection = FlexDirection.Row;
-            header.style.alignItems = Align.Center;
-            header.style.flexShrink = 0;
-            var titleLabel = Ui.Label(title, 30, Ui.Gold, true);
-            titleLabel.style.flexGrow = 1;
-            header.Add(titleLabel);
-            header.Add(Ui.Button("CLOSE", Close, 20));
-            window.Add(header);
+            VisualElement body = Ui.GameWindow(_backdrop, title, Close, team, 17, 6);
 
             if (!string.IsNullOrEmpty(subtitle))
             {
-                Label sub = Ui.Label(subtitle, 19, Ui.TextDim);
-                sub.style.marginTop = 4;
+                Label sub = Ui.GameText(subtitle, "ui-text-size__medium");
+                sub.style.unityTextAlign = TextAnchor.MiddleCenter;
                 sub.style.flexShrink = 0;
-                window.Add(sub);
+                body.Add(sub);
             }
 
             _tabs = new VisualElement();
             _tabs.style.flexDirection = FlexDirection.Row;
             _tabs.style.flexWrap = Wrap.Wrap;
+            _tabs.style.justifyContent = Justify.Center;
             _tabs.style.flexShrink = 0;
-            _tabs.style.marginTop = 10;
-            window.Add(_tabs);
+            _tabs.style.marginTop = 8;
+            body.Add(_tabs);
 
             _scroll = new ScrollView(ScrollViewMode.Vertical);
             _scroll.style.flexGrow = 1;
-            _scroll.style.marginTop = 10;
+            _scroll.style.marginTop = 6;
             _scroll.mouseWheelScrollSize = 62f;
             _scroll.horizontalScrollerVisibility = ScrollerVisibility.Hidden;
-            window.Add(_scroll);
+            body.Add(_scroll);
 
             List<string> categories = entries.Where(e => !e.Pinned && !string.IsNullOrEmpty(e.Category)).Select(e => e.Category).Distinct().ToList();
             if (categories.Count > 1) AddTab(AllTab);
@@ -120,25 +96,16 @@ namespace VoidCrewShipCustomizer
             Rebuild();
         }
 
+        /// <summary>A tab is one of the game's small buttons; the open one is the game's selected (orange) button.</summary>
         private void AddTab(string name)
         {
-            var tab = new VisualElement();
-            Ui.Padding(tab, 6, 14);
-            Ui.Margin(tab, 0, 6, 6, 0);
-            Ui.Radius(tab, 3);
-            Ui.Border(tab, 1, new Color(1f, 1f, 1f, 0.18f));
-            tab.Add(Ui.Label(name, 19, Ui.Text, true));
-            tab.RegisterCallback<PointerEnterEvent>(e =>
-            {
-                if (_tab != name) tab.style.backgroundColor = Ui.ButtonHover;
-            });
-            tab.RegisterCallback<PointerLeaveEvent>(e => StyleTab(name));
-            Ui.Click(tab, () =>
+            Button tab = Ui.SmallGameButton(name, () =>
             {
                 _tab = name;
                 foreach (string key in _tabButtons.Keys) StyleTab(key);
                 Rebuild();
             });
+            tab.style.marginBottom = 6;
             _tabButtons[name] = tab;
             _tabs.Add(tab);
             StyleTab(name);
@@ -147,11 +114,7 @@ namespace VoidCrewShipCustomizer
         private void StyleTab(string name)
         {
             VisualElement tab;
-            if (!_tabButtons.TryGetValue(name, out tab)) return;
-            bool selected = name == _tab;
-            tab.style.backgroundColor = selected ? Ui.Gold : Ui.ButtonColor;
-            var label = tab.Q<Label>();
-            if (label != null) label.style.color = selected ? Color.black : Ui.Text;
+            if (_tabButtons.TryGetValue(name, out tab)) tab.EnableInClassList("metem-button-selected", name == _tab);
         }
 
         private void Rebuild()
@@ -165,8 +128,8 @@ namespace VoidCrewShipCustomizer
             {
                 if ((_tab == null || _tab == AllTab) && entry.Category != lastCategory && !string.IsNullOrEmpty(entry.Category) && _tabButtons.Count > 0)
                 {
-                    Label heading = Ui.Label(entry.Category, 18, Ui.Gold, true);
-                    Ui.Margin(heading, count == 0 ? 2 : 12, 0, 4, 2);
+                    Label heading = Ui.GameText(entry.Category, "ui-text-size__medium");
+                    Ui.Margin(heading, count == 0 ? 2 : 14, 0, 4, 2);
                     _scroll.Add(heading);
                 }
                 lastCategory = entry.Category;
@@ -175,12 +138,120 @@ namespace VoidCrewShipCustomizer
             }
             if (count == 0 && !_entries.Any(e => e.Pinned))
             {
-                _scroll.Add(Ui.Label("Nothing fits here.", 20, Ui.TextDim));
+                Label nothing = Ui.GameText("Nothing fits here.", "ui-text-size__medium");
+                nothing.style.opacity = 0.7f;
+                _scroll.Add(nothing);
             }
             foreach (VisualElement child in _scroll.contentContainer.Children()) Ui.Announce(child);
         }
 
         private VisualElement MakeRow(Entry entry)
+        {
+            VisualElement row = null;
+            try
+            {
+                row = MakeGameRow(entry);
+            }
+            catch (Exception e)
+            {
+                Log.WarnOnce("game row", "Could not build a list row from the terminal's own template, so the lists use the customizer's own look: " + e.Message);
+            }
+            return row ?? MakeOwnRow(entry);
+        }
+
+        /// <summary>
+        /// A row made from the terminal's LOADOUTS list template (its look, hover, and the gold marking of the current
+        /// choice), with the icon, a detail line and a tag added. Null when the template isn't there or has changed.
+        /// </summary>
+        private VisualElement MakeGameRow(Entry entry)
+        {
+            if (Ui.ListEntryTemplate == null) return null;
+            TemplateContainer item = Ui.ListEntryTemplate.Instantiate();
+            Label title = item.Q<Label>("Title");
+            VisualElement row = title != null ? title.parent : null;
+            if (row == null) return null;
+            item.AddToClassList("metem-list-entry");
+            // The template is made for the narrow LOADOUTS column and one line of text; here it fills the window and grows.
+            item.style.width = new Length(100, LengthUnit.Percent);
+            item.style.height = StyleKeyword.Auto;
+            row.style.width = StyleKeyword.Auto;
+            row.style.flexGrow = 1;
+            row.style.height = StyleKeyword.Auto;
+            row.style.minHeight = 46;
+            row.style.alignItems = Align.Center;
+            row.style.paddingTop = 3;
+            row.style.paddingBottom = 3;
+            VisualElement lockIcon = item.Q("LockIcon");
+            if (lockIcon != null) lockIcon.style.display = DisplayStyle.None;
+            VisualElement marker = item.Q("RarityMarker");
+            // The current choice keeps the game's own (gold) marking; others show their rarity.
+            if (marker != null && !entry.Current) marker.style.backgroundColor = entry.Accent;
+
+            int at = row.IndexOf(title);
+            title.RemoveFromHierarchy();
+            title.text = entry.Name;
+            title.style.width = StyleKeyword.Auto;
+            title.style.height = StyleKeyword.Auto;
+            title.style.whiteSpace = WhiteSpace.Normal;
+            var texts = new VisualElement { pickingMode = PickingMode.Ignore };
+            texts.style.flexGrow = 1;
+            texts.style.flexShrink = 1;
+            texts.style.justifyContent = Justify.Center;
+            texts.Add(title);
+            if (!string.IsNullOrEmpty(entry.Detail))
+            {
+                Label detail = Ui.GameText(entry.Detail, "ui-text-size__small");
+                detail.style.opacity = 0.75f;
+                texts.Add(detail);
+            }
+            row.Insert(at, texts);
+            if (entry.Icon != null)
+            {
+                VisualElement icon = Ui.Icon(entry.Icon, 40);
+                Ui.Margin(icon, 0, 10, 0, 4);
+                row.Insert(at, icon);
+            }
+            if (!string.IsNullOrEmpty(entry.Tag))
+            {
+                Label tag = Ui.Label(entry.Tag, 17, entry.TagColor, true);
+                Ui.Margin(tag, 0, 12, 0, 10);
+                tag.style.flexShrink = 0;
+                tag.style.maxWidth = new Length(40, LengthUnit.Percent);
+                tag.style.unityTextAlign = TextAnchor.MiddleRight;
+                row.Add(tag);
+            }
+            if (entry.Current) item.AddToClassList("list-item__active");
+            AddTooltip(item, entry);
+
+            if (!entry.Enabled || entry.OnPick == null)
+            {
+                item.SetEnabled(false);
+                return item;
+            }
+            Ui.Click(item, () =>
+            {
+                Action pick = entry.OnPick;
+                Close();
+                pick();
+            });
+            return item;
+        }
+
+        private static void AddTooltip(VisualElement element, Entry entry)
+        {
+            if (entry.Tooltip == null) return;
+            try
+            {
+                element.AddManipulator(new TooltipManipulatorBase<ContextInfoTooltipVE, ContextHoverData>(new ContextHoverData(entry.Tooltip, entry.TooltipGuid)));
+            }
+            catch (Exception e)
+            {
+                Log.Verbose("No tooltip for " + entry.Name + ": " + e.Message);
+            }
+        }
+
+        /// <summary>The customizer's own row, for when the game's template can't be used.</summary>
+        private VisualElement MakeOwnRow(Entry entry)
         {
             var row = new VisualElement();
             row.style.flexDirection = FlexDirection.Row;
@@ -188,7 +259,6 @@ namespace VoidCrewShipCustomizer
             row.style.minHeight = 58;
             row.style.marginBottom = 4;
             Ui.Padding(row, 4, 10);
-            Ui.Radius(row, 3);
             Color background = entry.Current ? new Color(0.24f, 0.2f, 0.1f, 1f) : Ui.Row;
             row.style.backgroundColor = background;
             row.style.borderLeftWidth = 6;
@@ -225,17 +295,7 @@ namespace VoidCrewShipCustomizer
                 row.Add(tag);
             }
 
-            if (entry.Tooltip != null)
-            {
-                try
-                {
-                    row.AddManipulator(new TooltipManipulatorBase<ContextInfoTooltipVE, ContextHoverData>(new ContextHoverData(entry.Tooltip, entry.TooltipGuid)));
-                }
-                catch (Exception e)
-                {
-                    Log.Verbose("No tooltip for " + entry.Name + ": " + e.Message);
-                }
-            }
+            AddTooltip(row, entry);
 
             if (!entry.Enabled || entry.OnPick == null)
             {

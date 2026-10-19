@@ -4,6 +4,7 @@ using System.Reflection;
 using CG.Objects;
 using CG.Profile;
 using CG.Ship.Hull;
+using CG.Space;
 using HarmonyLib;
 using Photon.Pun;
 using ResourceAssets;
@@ -53,6 +54,8 @@ namespace VoidCrewShipCustomizer
             Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnLeaveUI", null, nameof(TerminalLeavePostfix));
             // During a CUSTOM run the storage racks take any item, as the CUSTOM editor lets them start with any item.
             Patch("CG.Ship.Hull.CarryablesSocket", "DoesAccept", nameof(RackAcceptsPrefix), null);
+            // A CUSTOM ship's racks hold exactly what was chosen, checked right after the ship spawns.
+            Patch("ShipLoadout", "InitializeShip", null, nameof(InitializeShipPostfix));
 
             // The rest of progression: best effort.
             Patch("CG.Cloud.CloudRewardsProfileSync", "AddItem", nameof(BlockRewardsPrefix), null);
@@ -349,6 +352,18 @@ namespace VoidCrewShipCustomizer
             catch
             {
                 return true;
+            }
+        }
+
+        private static void InitializeShipPostfix(ShipLoadout __instance, PlayerControlledShip __result)
+        {
+            try
+            {
+                CustomLoadouts.CheckRacksAfterSpawn(__instance, __result);
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Checking the CUSTOM ship's storage racks", e);
             }
         }
 

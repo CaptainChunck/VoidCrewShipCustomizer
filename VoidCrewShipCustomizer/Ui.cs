@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using CG.Client;
 using CG.Ship.Object;
 using UI;
@@ -100,6 +101,167 @@ namespace VoidCrewShipCustomizer
             var label = new Label(text) { pickingMode = PickingMode.Ignore };
             foreach (string name in classes) label.AddToClassList(name);
             return label;
+        }
+
+        /// <summary>A header like the terminal's own (SHIP SYSTEMS, DESCRIPTION): large white text with the game's shadow.</summary>
+        public static Label GameHeader(string text)
+        {
+            return GameLabel(text, "ui-text-size__large", "ui-text-color__white", "loadout-panel-header", "ui-text-dropshadow");
+        }
+
+        /// <summary>Body text in the game's style: <paramref name="sizeClass"/> is ui-text-size__small, __medium or __mediumPlus.</summary>
+        public static Label GameText(string text, string sizeClass)
+        {
+            Label label = GameLabel(text, sizeClass, "ui-text-color__white", "ui-text-dropshadow");
+            label.style.whiteSpace = WhiteSpace.Normal;
+            return label;
+        }
+
+        /// <summary>
+        /// One of the terminal's decorations, full width: "metem-decorative-bar-repeating" (the patterned bar along the top
+        /// and bottom of the screen) or "metem-decorative__box-border" (the line under each panel header). The tint
+        /// recolours it (a Void Crew Fleet team's colour, for example).
+        /// </summary>
+        public static VisualElement Decoration(string className, float height, Color? tint = null)
+        {
+            var decoration = new VisualElement { pickingMode = PickingMode.Ignore };
+            decoration.AddToClassList(className);
+            decoration.style.width = new Length(100, LengthUnit.Percent);
+            decoration.style.height = height;
+            decoration.style.flexShrink = 0;
+            if (tint.HasValue) decoration.style.unityBackgroundImageTintColor = tint.Value;
+            return decoration;
+        }
+
+        /// <summary>
+        /// The row template of the terminal's LOADOUTS list (ShipLoadoutTerminal.ListEntryPrefab), set while a terminal is
+        /// on screen. Pop-up lists build their rows from it, so they look and react like the game's own lists.
+        /// </summary>
+        public static VisualTreeAsset ListEntryTemplate;
+
+        // The game's colours (SharedUIColorTheme), for when its pop-up style sheet isn't loaded.
+        private static readonly Color PopupFill = new Color(0.188f, 0.188f, 0.188f, 1f);
+        private static readonly Color PopupOutline = new Color(0.741f, 0.906f, 0.984f, 1f);
+        private static readonly Color DecoBrown = new Color(0.369f, 0.329f, 0.29f, 1f);
+
+        private static StyleSheet _popupStyle;
+
+        /// <summary>
+        /// The game's own pop-up style sheet (PopupBaseStyle: .popup-background, .popup-border, .deco-color). It is loaded in
+        /// the hub but not attached to the loadout terminal, so the pop-ups attach it themselves. Null if it isn't loaded.
+        /// </summary>
+        private static StyleSheet PopupStyle()
+        {
+            if (_popupStyle != null) return _popupStyle;
+            try
+            {
+                _popupStyle = Resources.FindObjectsOfTypeAll<StyleSheet>().FirstOrDefault(s => s != null && s.name == "PopupBaseStyle");
+            }
+            catch (Exception e)
+            {
+                Log.Verbose("Could not look for the game's pop-up style: " + e.Message);
+            }
+            return _popupStyle;
+        }
+
+        /// <summary>
+        /// A pop-up window built like the game's own (its ConfirmPopup): the screen darkened, a dark-grey window with the
+        /// light-blue outline, a centred header over the brown separator, the content, a row of the game's small buttons
+        /// (CLOSE last), and the wings ornament. In a Void Crew Fleet battle the outline takes the team's colour. Returns
+        /// the window's body for the content.
+        /// </summary>
+        public static VisualElement GameWindow(VisualElement backdrop, string title, Action close, Color? team, float sideInset, float topInset,
+                                               params VisualElement[] buttons)
+        {
+            Fill(backdrop);
+            backdrop.style.backgroundColor = new Color(0f, 0f, 0f, 0.92f);
+            StyleSheet popupStyle = PopupStyle();
+            if (popupStyle != null && !backdrop.styleSheets.Contains(popupStyle)) backdrop.styleSheets.Add(popupStyle);
+
+            var background = new VisualElement { name = "Background" };
+            background.AddToClassList("popup-background");
+            background.style.position = Position.Absolute;
+            background.style.left = new Length(sideInset, LengthUnit.Percent);
+            background.style.right = new Length(sideInset, LengthUnit.Percent);
+            background.style.top = new Length(topInset, LengthUnit.Percent);
+            background.style.bottom = new Length(topInset, LengthUnit.Percent);
+            background.style.flexDirection = FlexDirection.Column;
+            if (popupStyle == null) background.style.backgroundColor = PopupFill;
+            background.RegisterCallback<PointerDownEvent>(e => e.StopPropagation());
+            backdrop.Add(background);
+
+            var border = new VisualElement { name = "Border" };
+            border.AddToClassList("popup-border");
+            border.style.flexGrow = 1;
+            border.style.flexDirection = FlexDirection.Column;
+            if (popupStyle == null)
+            {
+                Border(border, 2, team.HasValue ? team.Value : PopupOutline);
+                border.style.paddingTop = 20;
+                border.style.paddingRight = 25;
+                border.style.paddingBottom = 5;
+                border.style.paddingLeft = 25;
+            }
+            else if (team.HasValue)
+            {
+                border.style.unityBackgroundImageTintColor = team.Value;
+            }
+            background.Add(border);
+
+            Label header = GameLabel(title, "ui-text-size__large", "ui-text-color__white", "ui-text-dropshadow");
+            header.style.unityFontStyleAndWeight = FontStyle.Bold;
+            header.style.unityTextAlign = TextAnchor.UpperCenter;
+            header.style.flexShrink = 0;
+            border.Add(header);
+            VisualElement separator = Decoration("metem-decorative__box-border", 10);
+            separator.AddToClassList("deco-color");
+            if (popupStyle == null) SetBorderColor(separator, DecoBrown);
+            border.Add(separator);
+
+            var body = new VisualElement();
+            body.style.flexGrow = 1;
+            body.style.flexShrink = 1;
+            body.style.flexDirection = FlexDirection.Column;
+            body.style.marginTop = 6;
+            border.Add(body);
+
+            var buttonRow = new VisualElement();
+            buttonRow.style.flexDirection = FlexDirection.Row;
+            buttonRow.style.justifyContent = Justify.Center;
+            buttonRow.style.flexShrink = 0;
+            buttonRow.style.marginTop = 8;
+            foreach (VisualElement button in buttons) buttonRow.Add(button);
+            buttonRow.Add(SmallGameButton("CLOSE", close));
+            border.Add(buttonRow);
+
+            var wings = new VisualElement { name = "WingsDressup", pickingMode = PickingMode.Ignore };
+            wings.AddToClassList("metem-decorative__wings");
+            wings.AddToClassList("deco-color");
+            wings.style.alignSelf = Align.Center;
+            wings.style.flexShrink = 0;
+            if (popupStyle == null) wings.style.unityBackgroundImageTintColor = DecoBrown;
+            border.Add(wings);
+            return body;
+        }
+
+        private static void SetBorderColor(VisualElement element, Color color)
+        {
+            element.style.borderLeftColor = color;
+            element.style.borderRightColor = color;
+            element.style.borderTopColor = color;
+            element.style.borderBottomColor = color;
+        }
+
+        /// <summary>The game's small button (the small version of SELECT) at its own size, 42 px high.</summary>
+        public static Button SmallGameButton(string text, Action onClick)
+        {
+            Button button = GameButton(text, onClick, "metem-button-size__small");
+            Margin(button, 0, 6, 0, 6);
+            button.style.paddingLeft = 24;
+            button.style.paddingRight = 24;
+            button.style.whiteSpace = WhiteSpace.NoWrap;
+            button.style.flexShrink = 0;
+            return button;
         }
 
         /// <summary>Makes any element clickable with the left mouse button, the same way the game's lists are.</summary>

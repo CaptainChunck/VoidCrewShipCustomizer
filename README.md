@@ -32,18 +32,24 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
   - **HOMUNCULUS**: the standard homunculus, or any Blessed Homunculus from the game's loadouts.
   - **FABRICATOR**: how many alloys the run starts with (the game's own amount, or 0 to 10,000), and the fabricator's
     level, MK I to MK III.
-  - **COPY LOADOUT**: start from any of the game's loadouts, including the challenge ones, then change what you like.
-  - **EMPTY**: clear the hardpoints, the racks, or everything.
+  - **SAVE LOADOUT**: keep this CUSTOM loadout on your PC, in one of 10 slots per ship, to bring back in any later
+    match. Works on a loadout you can only look at, too.
+  - **LOAD LOADOUT**: replace the CUSTOM loadout with one you saved, any of the game's loadouts (the challenge ones
+    included), or an empty ship (all hardpoints, all racks, or everything), then change what you like.
+- **Pop-up windows like the game's own**: the pickers and the storage-rack window are built from the game's pop-up and
+  list styles (its dark-grey window with the light-blue outline, list rows and buttons).
 - **Works with [Void Crew Fleet](https://thunderstore.io/c/void-crew/)**: Fleet's second ship can use CUSTOM too, with
-  a layout and fabricator level of its own (the same as ship 1's until you change it under SHIP 2). Any player can set
-  it up. With a Void Crew Fleet that supports it, ship 2 can also start with alloys of its own; otherwise both ships
+  a layout and fabricator level of its own (the same as ship 1's until you change it under SHIP 2). Choose CUSTOM with
+  SELECT under SHIP 2 for ship 2 to use it; left AS SHIP 1, ship 2 starts as a copy of ship 1. Any player can set it up.
+  With Void Crew Fleet 0.2.1 or newer, ship 2 can also start with alloys of its own; with an older Fleet, both ships
   start with the alloys of ship 1's CUSTOM loadout.
   - In a **Fleet Battle** (PvP), ship 1 belongs to the BLUE team and ship 2 to the RED team: only a ship's own team can
     change its CUSTOM loadout, and the other team sees it view-only. The CUSTOM pop-ups take the team's colour.
   - Without Fleet (not installed, or turned off in its config), all of this stays off and Ship Customizer works on its
     own.
 - Your CUSTOM loadouts are saved per ship in
-  `%USERPROFILE%\AppData\LocalLow\Hutlihut Games ApS\Void Crew\ShipCustomizer\custom-loadouts.json`.
+  `%USERPROFILE%\AppData\LocalLow\Hutlihut Games ApS\Void Crew\ShipCustomizer\custom-loadouts.json`, and the loadouts
+  you save with SAVE LOADOUT in `saved-loadouts.json` next to it.
 
 ## Multiplayer and the modding rules
 
@@ -59,7 +65,7 @@ Ship Customizer follows Void Crew's
   everyone is back in the hub. The room is closed to new players during a CUSTOM mission. A saved CUSTOM run stays
   without progression when you continue it, and can only be continued while everyone has the mod.
 - The CUSTOM loadouts are the host's. Everyone sees and changes the host's, and the changes are saved on the host's PC.
-  COPY LOADOUT has **YOUR OWN CUSTOM** to bring in the one saved on your PC. If two players change the same loadout at
+  LOAD LOADOUT has your saved loadouts and **YOUR OWN CUSTOM**, to bring in what's on your PC. If two players change the same loadout at
   the same moment, the later change wins.
 - With a host on Ship Customizer 0.4.0 or older, only the host can choose or change CUSTOM; everyone else sees it.
 
@@ -98,7 +104,7 @@ To remove it, delete the DLL. Your saved CUSTOM loadouts stay in the save folder
 - In VR the terminal pointer can drift from where clicks land when you turn your head, so small targets such as the
   hardpoint icons are hard to hit. Use **HARDPOINTS** instead; its rows are large.
 - The first time the terminal opens, the mod reads every module and weapon from the game, which takes a second or two.
-- Crates sitting unbuilt on a hardpoint in a game loadout are not copied by COPY A LOADOUT.
+- Crates sitting unbuilt on a hardpoint in a game loadout are not copied by LOAD LOADOUT.
 
 ## Bug reports
 

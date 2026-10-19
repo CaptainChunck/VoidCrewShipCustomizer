@@ -31,8 +31,8 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <param name="viewOnlyReason">Why the racks can't be changed, shown when <paramref name="editable"/> is false.</param>
-        /// <param name="frame">The window's frame colour (gold, or a Void Crew Fleet team's colour in a Fleet Battle).</param>
-        public StoragePanel(VisualElement host, HullInfo hull, Func<HullConfig> config, bool editable, string viewOnlyReason, Color frame,
+        /// <param name="team">A Void Crew Fleet team's colour in a Fleet Battle (the frame and bars take it), otherwise null.</param>
+        public StoragePanel(VisualElement host, HullInfo hull, Func<HullConfig> config, bool editable, string viewOnlyReason, Color? team,
                             Action<ShelfInfo, int> onSlotClicked, Action<string> onAction)
         {
             _hull = hull;
@@ -43,53 +43,26 @@ namespace VoidCrewShipCustomizer
             OnAction = onAction;
 
             _backdrop = new VisualElement { name = "ShipCustomizerStorage" };
-            Ui.Fill(_backdrop);
-            _backdrop.style.backgroundColor = Ui.Backdrop;
             _backdrop.RegisterCallback<PointerDownEvent>(e =>
             {
                 if (e.target == _backdrop) Close();
             });
+            VisualElement[] actions = editable
+                ? new VisualElement[] { Ui.SmallGameButton("EMPTY ALL", () => Act("empty")), Ui.SmallGameButton("LOAD RACKS", () => Act("copy")) }
+                : new VisualElement[0];
+            VisualElement body = Ui.GameWindow(_backdrop, "STORAGE RACKS · " + hull.Name.ToUpperInvariant(), Close, team, 10, 5, actions);
 
-            var window = new VisualElement();
-            window.style.position = Position.Absolute;
-            window.style.left = new Length(10, LengthUnit.Percent);
-            window.style.right = new Length(10, LengthUnit.Percent);
-            window.style.top = new Length(6, LengthUnit.Percent);
-            window.style.bottom = new Length(6, LengthUnit.Percent);
-            window.style.backgroundColor = Ui.Window;
-            Ui.Border(window, 2, frame);
-            Ui.Radius(window, 6);
-            Ui.Padding(window, 14, 18);
-            window.style.flexDirection = FlexDirection.Column;
-            window.RegisterCallback<PointerDownEvent>(e => e.StopPropagation());
-            _backdrop.Add(window);
-
-            var header = new VisualElement();
-            header.style.flexDirection = FlexDirection.Row;
-            header.style.alignItems = Align.Center;
-            header.style.flexShrink = 0;
-            Label title = Ui.Label("STORAGE RACKS · " + hull.Name.ToUpperInvariant(), 30, Ui.Gold, true);
-            title.style.flexGrow = 1;
-            header.Add(title);
-            if (editable)
-            {
-                header.Add(Ui.Button("EMPTY ALL", () => Act("empty"), 20));
-                header.Add(Ui.Button("COPY FROM LOADOUT", () => Act("copy"), 20));
-            }
-            header.Add(Ui.Button("CLOSE", Close, 20));
-            window.Add(header);
-
-            _summary = Ui.Label("", 19, Ui.TextDim);
-            _summary.style.marginTop = 4;
+            _summary = Ui.GameText("", "ui-text-size__medium");
+            _summary.style.unityTextAlign = TextAnchor.MiddleCenter;
             _summary.style.flexShrink = 0;
-            window.Add(_summary);
+            body.Add(_summary);
 
             _scroll = new ScrollView(ScrollViewMode.Vertical);
             _scroll.style.flexGrow = 1;
-            _scroll.style.marginTop = 10;
+            _scroll.style.marginTop = 6;
             _scroll.mouseWheelScrollSize = 70f;
             _scroll.horizontalScrollerVisibility = ScrollerVisibility.Hidden;
-            window.Add(_scroll);
+            body.Add(_scroll);
 
             host.Add(_backdrop);
             Ui.Announce(_backdrop);
@@ -117,9 +90,12 @@ namespace VoidCrewShipCustomizer
             {
                 List<string> codes;
                 config.Storage.TryGetValue(shelf.CoreIndex, out codes);
-                Label heading = Ui.Label(shelf.Name + "  ·  " + shelf.Slots.Count + " SLOTS", 20, Ui.Gold, true);
-                Ui.Margin(heading, 8, 0, 6, 2);
+                Label heading = Ui.GameText(shelf.Name + "  ·  " + shelf.Slots.Count + " SLOTS", "ui-text-size__medium");
+                Ui.Margin(heading, 8, 0, 2, 2);
                 _scroll.Add(heading);
+                VisualElement line = Ui.Decoration("metem-decorative__box-border", 8);
+                line.style.marginBottom = 6;
+                _scroll.Add(line);
 
                 var grid = new VisualElement();
                 grid.style.flexDirection = FlexDirection.Row;
@@ -139,28 +115,29 @@ namespace VoidCrewShipCustomizer
             Option option = null;
             bool filled = !string.IsNullOrEmpty(code) && Catalog.TryGetOption(code, out option);
 
+            // A slot in the style of the terminal's module slots: square, dark, framed in the item's rarity colour.
             var tile = new VisualElement();
             tile.style.width = 132;
             tile.style.height = 132;
             Ui.Margin(tile, 0, 8, 8, 0);
             Ui.Padding(tile, 6, 6);
-            Ui.Radius(tile, 4);
             tile.style.alignItems = Align.Center;
             tile.style.justifyContent = Justify.Center;
-            Color background = filled ? Ui.Row : new Color(0.09f, 0.095f, 0.1f, 1f);
+            Color background = filled ? new Color(0.1f, 0.105f, 0.11f, 0.95f) : new Color(0.05f, 0.055f, 0.06f, 0.9f);
             tile.style.backgroundColor = background;
-            Ui.Border(tile, 2, filled ? Ui.RarityColor(option.Rarity) : new Color(1f, 1f, 1f, 0.15f));
+            Ui.Border(tile, 2, filled ? Ui.RarityColor(option.Rarity) : new Color(1f, 1f, 1f, 0.12f));
 
-            Label number = Ui.Label((index + 1).ToString(), 15, Ui.TextDim);
+            Label number = Ui.GameText((index + 1).ToString(), "ui-text-size__small");
+            number.style.opacity = 0.6f;
             number.style.position = Position.Absolute;
             number.style.left = 6;
-            number.style.top = 4;
+            number.style.top = 2;
             tile.Add(number);
 
             if (filled)
             {
                 tile.Add(Ui.Icon(option.Icon, 64));
-                Label name = Ui.Label(option.Name, 15, Ui.Text);
+                Label name = Ui.GameText(option.Name, "ui-text-size__small");
                 name.style.unityTextAlign = TextAnchor.MiddleCenter;
                 name.style.marginTop = 4;
                 name.style.maxHeight = 40;
@@ -181,7 +158,8 @@ namespace VoidCrewShipCustomizer
             else
             {
                 tile.Add(Ui.Label(string.IsNullOrEmpty(code) ? "+" : "?", 44, new Color(1f, 1f, 1f, 0.35f), true));
-                Label empty = Ui.Label(string.IsNullOrEmpty(code) ? "EMPTY" : "UNKNOWN ITEM", 14, Ui.TextDim);
+                Label empty = Ui.GameText(string.IsNullOrEmpty(code) ? "EMPTY" : "UNKNOWN ITEM", "ui-text-size__small");
+                empty.style.opacity = 0.6f;
                 empty.style.unityTextAlign = TextAnchor.MiddleCenter;
                 tile.Add(empty);
             }
