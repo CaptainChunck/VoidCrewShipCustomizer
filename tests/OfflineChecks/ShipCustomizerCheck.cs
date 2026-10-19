@@ -581,6 +581,14 @@ internal static class Program
         Check(blessing(Intro + "\r\n\r\n<color=#FFFFFF><b>Blessing</b></color>\r\n" + Effects.Replace("\n", "\r\n") + "\r\n") == Effects, "the same with a coloured heading and Windows line ends");
         Check(blessing(Intro + "\n\nBlessing\n" + Effects) == Effects, "a heading without bold: the last paragraph, without its heading");
         Check(blessing(Intro) == null && blessing("") == null, "the standard homunculus (one paragraph, no heading) has no blessing");
+
+        // 0.7.1: item names on the storage-rack tiles get smaller text when they are long, so they fit under the icon.
+        Console.WriteLine("Storage tiles:");
+        MethodInfo nameSize = plugin.GetType("VoidCrewShipCustomizer.StoragePanel", true).GetMethod("NameFontSize", BindingFlags.NonPublic | BindingFlags.Static);
+        Func<string, int> size = name => (int)nameSize.Invoke(null, new object[] { name });
+        Check(size("Large Power Cell") == 18 && size("Large Nano Alloy Cluster") == 15 && size("Heavy Caliber: Large Crate") == 13 &&
+              size("Payload Battery: Cluster Missiles") == 13 && size(null) == 18,
+            "tile names: the game's small text up to 16 letters, 15 up to 24, 13 for longer ones");
     }
 
     private static void AddSocket(IList sockets, Type vector3, object right, object forward, string size, float x, float y, float z)

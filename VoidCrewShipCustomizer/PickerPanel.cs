@@ -94,6 +94,8 @@ namespace VoidCrewShipCustomizer
             if (categories.Count > 1) AddTab(AllTab);
             foreach (string category in categories) AddTab(category);
             _tab = categories.Count > 1 ? (categories.Contains(initialTab) ? initialTab : AllTab) : null;
+            // The tab the window opens on is highlighted from the start, not only once another one is clicked.
+            foreach (string key in _tabButtons.Keys) StyleTab(key);
 
             host.Add(_backdrop);
             Ui.Announce(_backdrop);

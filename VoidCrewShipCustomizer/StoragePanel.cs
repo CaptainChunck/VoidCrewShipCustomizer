@@ -122,42 +122,33 @@ namespace VoidCrewShipCustomizer
             bool filled = !string.IsNullOrEmpty(code) && Catalog.TryGetOption(code, out option);
             bool notAllowed = filled && _notAllowed != null && _notAllowed(code);
 
-            // A slot in the style of the terminal's module slots: square, dark, framed in the item's rarity colour.
+            // A slot in the style of the terminal's module slots: square, dark, framed in the item's rarity colour. The
+            // top strip is kept for the slot number (and the NOT ALLOWED mark), the rest for the icon and the name.
             var tile = new VisualElement();
             tile.style.width = 132;
             tile.style.height = 132;
             Ui.Margin(tile, 0, 8, 8, 0);
-            Ui.Padding(tile, 6, 6);
+            Ui.Padding(tile, 4, 6);
+            tile.style.paddingTop = 18;
             tile.style.alignItems = Align.Center;
             tile.style.justifyContent = Justify.Center;
             Color background = filled ? new Color(0.1f, 0.105f, 0.11f, 0.95f) : new Color(0.05f, 0.055f, 0.06f, 0.9f);
             tile.style.backgroundColor = background;
             Ui.Border(tile, 2, notAllowed ? Ui.Warning : (filled ? Ui.RarityColor(option.Rarity) : new Color(1f, 1f, 1f, 0.12f)));
 
-            Label number = Ui.GameText((index + 1).ToString(), "ui-text-size__small");
-            number.style.opacity = 0.6f;
-            number.style.position = Position.Absolute;
-            number.style.left = 6;
-            number.style.top = 2;
-            tile.Add(number);
-            if (notAllowed)
-            {
-                // A Fleet Battle's match rules don't allow it: the host takes it off when the mission starts.
-                Label mark = Ui.Label("NOT ALLOWED", 12, Ui.Warning, true);
-                mark.style.position = Position.Absolute;
-                mark.style.right = 5;
-                mark.style.top = 4;
-                tile.Add(mark);
-            }
-
             if (filled)
             {
-                tile.Add(Ui.Icon(option.Icon, 64));
+                tile.Add(Ui.Icon(option.Icon, 52));
+                // Long names get smaller text, and show from their first line, so they fit under the icon.
                 Label name = Ui.GameText(option.Name, "ui-text-size__small");
-                name.style.unityTextAlign = TextAnchor.MiddleCenter;
+                name.style.fontSize = NameFontSize(RichText.Plain(option.Name));
+                name.style.unityTextAlign = TextAnchor.UpperCenter;
                 name.style.marginTop = 4;
-                name.style.maxHeight = 40;
+                name.style.marginLeft = 0;
+                name.style.marginRight = 0;
+                name.style.maxHeight = 48;
                 name.style.overflow = Overflow.Hidden;
+                name.style.flexShrink = 0;
                 tile.Add(name);
                 if (option.Context != null)
                 {
@@ -180,12 +171,49 @@ namespace VoidCrewShipCustomizer
                 tile.Add(empty);
             }
 
+            // The slot number and, when a Fleet Battle's match rules don't allow the item, NOT ALLOWED (the host takes it
+            // off when the mission starts): one row, so they never run into each other, drawn over the icon.
+            var top = new VisualElement { pickingMode = PickingMode.Ignore };
+            top.style.position = Position.Absolute;
+            top.style.left = 6;
+            top.style.right = 5;
+            top.style.top = 1;
+            top.style.flexDirection = FlexDirection.Row;
+            top.style.justifyContent = Justify.SpaceBetween;
+            top.style.alignItems = Align.Center;
+            Label number = Ui.GameText((index + 1).ToString(), "ui-text-size__small");
+            number.style.opacity = 0.6f;
+            number.style.flexShrink = 0;
+            number.style.marginLeft = 0;
+            top.Add(number);
+            if (notAllowed)
+            {
+                Label mark = Ui.Label("NOT ALLOWED", 11, Ui.Warning, true);
+                mark.style.marginLeft = 4;
+                mark.style.whiteSpace = WhiteSpace.NoWrap;
+                mark.style.overflow = Overflow.Hidden;
+                mark.style.flexShrink = 1;
+                top.Add(mark);
+            }
+            tile.Add(top);
+
             if (_editable)
             {
                 Ui.Hover(tile, background, Ui.RowHover);
                 Ui.Click(tile, () => _onSlotClicked(shelf, index));
             }
             return tile;
+        }
+
+        /// <summary>
+        /// The text size for an item's name on a tile: the game's small text (18) for short names, smaller for longer
+        /// ones, so even "Payload Battery: Cluster Missiles" fits in three lines under the icon.
+        /// </summary>
+        internal static int NameFontSize(string plainName)
+        {
+            int length = plainName == null ? 0 : plainName.Length;
+            if (length <= 16) return 18;
+            return length <= 24 ? 15 : 13;
         }
 
         public void Close()

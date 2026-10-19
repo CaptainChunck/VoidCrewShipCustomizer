@@ -16,7 +16,7 @@ namespace VoidCrewShipCustomizer
     {
         public const string Guid = "com.captainchunck.voidcrew.shipcustomizer";
         public const string Name = "Void Crew Ship Customizer";
-        public const string Version = "0.7.0";
+        public const string Version = "0.7.1";
 
         // Fixed id the game's mod list (main menu) shows this plugin under.
         private static readonly GUIDUnion ModId = new GUIDUnion("5c0ffee55ea7c0de5c0ffee55ea7c0de");

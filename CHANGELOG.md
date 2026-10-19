@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1
+
+- Long item names on the storage-rack tiles are readable again. They get smaller text and show from their first line,
+  so "Heavy Caliber: Large Crate" no longer shows only "Caliber:".
+- The NOT ALLOWED mark on a storage tile no longer runs into two-digit slot numbers.
+- A pop-up with tabs highlights the tab it opens on straight away, not only after you click a tab.
+
 ## 0.7.0
 
 - **The HOMUNCULUS menu shows what each Blessed Homunculus's blessing does**: the text of the game's own tooltip, with
