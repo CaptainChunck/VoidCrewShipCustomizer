@@ -126,6 +126,26 @@ namespace VoidCrewShipCustomizer
             }
         }
 
+        /// <summary>
+        /// Host, at mission start: the alloys ship 2's CUSTOM loadout starts with, or -1 for the game's own amount (also
+        /// when the GUID isn't CUSTOM, or Void Crew Fleet isn't running). For a plugin that keeps an alloy count per ship;
+        /// ship 1's goes through the game's own starting amount. Added in 0.5.1, ApiVersion still 1.
+        /// </summary>
+        public static int GetShip2Alloys(GUIDUnion loadout)
+        {
+            try
+            {
+                HullInfo hull;
+                if (!FleetLink.Running || GetDef(loadout) == null || !CustomLoadouts.TryGetHullOfCustomGuid(loadout, out hull)) return -1;
+                return LoadoutStore.Get(hull, 2).Alloys;
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Reading ship 2's starting alloys", e);
+                return -1;
+            }
+        }
+
         internal static void RaiseShip2CustomCancelled()
         {
             Action handlers = Ship2CustomCancelled;

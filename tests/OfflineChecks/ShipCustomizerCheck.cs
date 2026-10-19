@@ -168,6 +168,7 @@ internal static class Program
         ApiMethod(api, "CheckShip2", "System.String", "GUIDUnion", "System.Int32");
         ApiMethod(api, "SetShip2", "System.Void", "GUIDUnion");
         ApiMethod(api, "BuildShip2", "ShipLoadout", "GUIDUnion");
+        ApiMethod(api, "GetShip2Alloys", "System.Int32", "GUIDUnion");
         EventDefinition cancelled = api.Events.FirstOrDefault(e => e.Name == "Ship2CustomCancelled");
         Check(cancelled != null && cancelled.EventType.FullName == "System.Action" && cancelled.AddMethod.IsPublic && cancelled.AddMethod.IsStatic,
             "public static event System.Action Ship2CustomCancelled");
@@ -416,6 +417,8 @@ internal static class Program
         var refusal = (string)api.GetMethod("CheckShip2").Invoke(null, new[] { destroyerCustom, (object)1 });
         Check(refusal != null && refusal.Contains("Fleet"), "ship 2 can't be given a CUSTOM loadout (\"" + refusal + "\")");
         Check(api.GetMethod("BuildShip2").Invoke(null, new[] { destroyerCustom }) == null, "no ship 2 is built");
+        Check((int)api.GetMethod("GetShip2Alloys").Invoke(null, new[] { destroyerCustom }) == -1, "ship 2 has no starting alloys of its own");
+        Check(!(bool)fleet.GetProperty("ReadsShip2Alloys").GetValue(null, null), "the FABRICATOR menu doesn't offer ship 2's alloys");
     }
 
     private static void AddSocket(IList sockets, Type vector3, object right, object forward, string size, float x, float y, float z)

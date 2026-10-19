@@ -23,7 +23,22 @@ namespace VoidCrewShipCustomizer
 
         private static bool _looked;
         private static bool _running;
+        private static bool _readsShip2Alloys;
         private static MethodInfo _isTeamMatch, _teamOfShip, _canEditShip, _shipColor;
+
+        /// <summary>
+        /// Whether Void Crew Fleet gives ship 2 the starting alloys of its own CUSTOM loadout (it calls
+        /// ShipCustomizerApi.GetShip2Alloys, and says so with FleetApi.ReadsShip2Alloys). Older Fleets start both ships
+        /// with ship 1's, so the terminal only offers ship 2's alloys when this is true.
+        /// </summary>
+        public static bool ReadsShip2Alloys
+        {
+            get
+            {
+                Look();
+                return _readsShip2Alloys;
+            }
+        }
 
         /// <summary>Whether Void Crew Fleet is installed and turned on. Until the hub has loaded, false.</summary>
         public static bool Running
@@ -83,6 +98,7 @@ namespace VoidCrewShipCustomizer
                 Log.Info("Void Crew Fleet is running without its team rules (an older Fleet): every player may change both ships' CUSTOM loadouts.");
                 return;
             }
+            _readsShip2Alloys = Flag(api, "ReadsShip2Alloys");
             PropertyInfo isTeamMatch = api.GetProperty("IsTeamMatch", BindingFlags.Public | BindingFlags.Static);
             MethodInfo teamOfShip = api.GetMethod("TeamOfShip", new[] { typeof(int) });
             MethodInfo canEditShip = api.GetMethod("CanEditShip", new[] { typeof(int), typeof(int) });
@@ -101,6 +117,15 @@ namespace VoidCrewShipCustomizer
             EventInfo changed = api.GetEvent("TeamsChanged", BindingFlags.Public | BindingFlags.Static);
             if (changed != null) changed.AddEventHandler(null, (Action)OnTeamsChanged);
             Log.Info("Void Crew Fleet found: in a Fleet Battle, only a ship's own team can change its CUSTOM loadout.");
+        }
+
+        /// <summary>An optional true/false of Fleet's API (a static property or field); false when it isn't there.</summary>
+        private static bool Flag(Type api, string name)
+        {
+            PropertyInfo property = api.GetProperty(name, BindingFlags.Public | BindingFlags.Static);
+            if (property != null && property.PropertyType == typeof(bool)) return (bool)property.GetValue(null, null);
+            FieldInfo field = api.GetField(name, BindingFlags.Public | BindingFlags.Static);
+            return field != null && field.FieldType == typeof(bool) && (bool)field.GetValue(null);
         }
 
         /// <summary>Fleet's API type, from Fleet's own assembly (or any loaded assembly, if its plugin object is gone).</summary>

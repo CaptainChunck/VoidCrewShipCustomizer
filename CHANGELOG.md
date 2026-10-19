@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1
+
+- With Void Crew Fleet, ship 2's FABRICATOR menu has ALLOYS too, so ship 2 (the RED team's ship in a Fleet Battle) can
+  start with alloys of its own. It needs a Void Crew Fleet that supports this. With an older Fleet, the menu shows the
+  level only, and both ships start with ship 1's alloys as before.
+- For Void Crew Fleet: a new API member, `GetShip2Alloys` (ApiVersion stays 1).
+
 ## 0.5.0
 
 - **Every player with Ship Customizer can choose CUSTOM and change it**, not only the host.

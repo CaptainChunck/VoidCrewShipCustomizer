@@ -622,8 +622,10 @@ namespace VoidCrewShipCustomizer
         {
             HullConfig config = CustomLoadouts.ConfigToShow(hull);
             bool shipTwo = CustomLoadouts.TerminalShip == 2;
+            // Ship 2's alloys are kept by Void Crew Fleet: offered only when Fleet takes them from ship 2's CUSTOM loadout.
+            bool alloys = !shipTwo || FleetLink.ReadsShip2Alloys;
             var entries = new List<PickerPanel.Entry>();
-            if (!shipTwo)
+            if (alloys)
             {
                 entries.Add(AlloyEntry(hull, -1, config.Alloys, "GAME DEFAULT", "The game's own starting alloys: a bonus from the players' ranks."));
                 foreach (int amount in AlloyChoices)
@@ -651,10 +653,11 @@ namespace VoidCrewShipCustomizer
                     OnPick = () => Edit(hull, c => c.FabricatorLevel = chosen)
                 });
             }
-            OpenPicker("FABRICATOR",
-                shipTwo ? "Ship 2's fabricator level. Alloys come from ship 1's CUSTOM loadout: with two ships, both start with them."
-                        : "What the ship's fabricator starts with: alloys to print and upgrade with, and its level. Saved runs keep what they had.",
-                entries, null);
+            string subtitle = !alloys
+                ? "Ship 2's fabricator level. Its own starting alloys need a newer Void Crew Fleet; until then both ships start with ship 1's."
+                : (shipTwo ? "What ship 2's fabricator starts with" : "What the ship's fabricator starts with") +
+                  ": alloys to print and upgrade with, and its level. Saved runs keep what they had.";
+            OpenPicker("FABRICATOR", subtitle, entries, null);
         }
 
         private static PickerPanel.Entry AlloyEntry(HullInfo hull, int amount, int currentAmount, string name, string detail)

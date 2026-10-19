@@ -43,8 +43,8 @@ Ship Customizer follows Void Crew's official modding guidelines for sandbox mods
 
 With Void Crew Fleet installed, its second ship can use CUSTOM too. Under SHIP 2 the terminal shows ship 2's CUSTOM
 loadout: the same as ship 1's until you change it there. COPY LOADOUT has SAME AS SHIP 1 to go back. Ship 2's fabricator
-gets its own level, and both ships start with ship 1's alloys. Any player can set ship 2 up, and the same rules apply to
-both ships.
+gets its own level and, with a Void Crew Fleet that supports it, its own starting alloys (otherwise both ships start with
+ship 1's). Any player can set ship 2 up, and the same rules apply to both ships.
 
 In a **Fleet Battle** (PvP), ship 1 belongs to the BLUE team and ship 2 to the RED team: only a ship's own team can change
 its CUSTOM loadout, and the other team sees it view-only.

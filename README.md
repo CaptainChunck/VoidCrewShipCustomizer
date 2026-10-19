@@ -36,7 +36,8 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
   - **EMPTY**: clear the hardpoints, the racks, or everything.
 - **Works with [Void Crew Fleet](https://thunderstore.io/c/void-crew/)**: Fleet's second ship can use CUSTOM too, with
   a layout and fabricator level of its own (the same as ship 1's until you change it under SHIP 2). Any player can set
-  it up. Both ships start with the alloys of ship 1's CUSTOM loadout.
+  it up. With a Void Crew Fleet that supports it, ship 2 can also start with alloys of its own; otherwise both ships
+  start with the alloys of ship 1's CUSTOM loadout.
   - In a **Fleet Battle** (PvP), ship 1 belongs to the BLUE team and ship 2 to the RED team: only a ship's own team can
     change its CUSTOM loadout, and the other team sees it view-only. The CUSTOM pop-ups take the team's colour.
   - Without Fleet (not installed, or turned off in its config), all of this stays off and Ship Customizer works on its
@@ -161,6 +162,7 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
 | `string CheckShip2(GUIDUnion, int actorNumber)` | Host: null if that player may give ship 2 this CUSTOM loadout now (any player with the mod from 0.5.0; only the host before), otherwise the reason. |
 | `void SetShip2(GUIDUnion)` | Host: ship 2 now uses this loadout (CUSTOM or not); other players with the mod see its layout. |
 | `ShipLoadout BuildShip2(GUIDUnion)` | Host, from a `GSIngame.TransitionTo` prefix that runs after this plugin's: ship 2's CUSTOM `ShipLoadout`, or null (use the stand-in). Makes the run a CUSTOM run. |
+| `int GetShip2Alloys(GUIDUnion)` | Host, at mission start: the alloys ship 2's CUSTOM loadout starts with, or -1 for the game's own amount (0.5.1). |
 | `event Action Ship2CustomCancelled` | Host: ship 2's CUSTOM was switched off in the hub because someone without the mod joined. |
 
 ## License
