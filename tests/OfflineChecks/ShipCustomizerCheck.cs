@@ -13,7 +13,7 @@ using Mono.Cecil;
 //  3. a Custom loadout config survives a JSON round trip with the game's Newtonsoft;
 //  4. the public API other plugins (Void Crew Fleet) call by reflection keeps its names and signatures;
 //  5. Void Crew Fleet's own API has the members this plugin looks up by name (when Fleet's DLL is there), and without
-//     Fleet everything for a second ship stays off.
+//     Fleet everything for its ships (2 to 6) stays off.
 // Run it with tests\build-and-test.ps1, which builds the plugin first. When the plugin starts looking up another game
 // member by name (a Harmony patch target, a ___field injection, AccessTools.Field/Method), add a check for it below.
 // Usage: ShipCustomizerCheck.exe <plugin dir> <game Managed dir> <BepInEx core dir> [<desktop Newtonsoft.Json dir> [<VoidCrewFleet.dll>]]
@@ -186,6 +186,15 @@ internal static class Program
         EventDefinition cancelled = api.Events.FirstOrDefault(e => e.Name == "Ship2CustomCancelled");
         Check(cancelled != null && cancelled.EventType.FullName == "System.Action" && cancelled.AddMethod.IsPublic && cancelled.AddMethod.IsStatic,
             "public static event System.Action Ship2CustomCancelled");
+        // 0.9.0: ships 2 to 6 (Void Crew Fleet 0.4.0), as agreed with the Fleet session.
+        ApiMethod(api, "GetDefaultLoadout", "ResourceAssets.ShipLoadoutDataDef", "GUIDUnion");
+        ApiMethod(api, "CheckShip", "System.String", "System.Int32", "GUIDUnion", "System.Int32");
+        ApiMethod(api, "SetShip", "System.Void", "System.Int32", "GUIDUnion");
+        ApiMethod(api, "BuildShip", "ShipLoadout", "System.Int32", "GUIDUnion");
+        ApiMethod(api, "GetShipAlloys", "System.Int32", "System.Int32", "GUIDUnion");
+        EventDefinition perShip = api.Events.FirstOrDefault(e => e.Name == "ShipCustomCancelled");
+        Check(perShip != null && perShip.EventType.FullName == "System.Action`1<System.Int32>" && perShip.AddMethod.IsPublic && perShip.AddMethod.IsStatic,
+            "public static event System.Action<int> ShipCustomCancelled");
     }
 
     // ------------------------------------------------------------------ 5. Void Crew Fleet's API (read from its DLL, not loaded)
@@ -215,6 +224,22 @@ internal static class Program
         EventDefinition changed = api.Events.FirstOrDefault(e => e.Name == "TeamsChanged");
         Check(changed != null && changed.EventType.FullName == "System.Action" && changed.AddMethod.IsPublic && changed.AddMethod.IsStatic,
             "public static event System.Action TeamsChanged");
+
+        // Ships 3 to 6 (Void Crew Fleet 0.4.0 on): FleetLink needs ShipCount, and uses the others when they are there.
+        Console.WriteLine("Void Crew Fleet's ships API (FleetLink looks these up by name):");
+        if (api.Properties.All(p => p.Name != "ShipCount"))
+        {
+            Console.WriteLine("  skip this Void Crew Fleet build has no ships 3 to 6 (older than 0.4.0)");
+        }
+        else
+        {
+            ApiProperty(api, "ShipCount", "System.Int32");
+            ApiMethod(api, "HullOfShip", "GUIDUnion", "System.Int32");
+            ApiMethod(api, "ShipName", "System.String", "System.Int32");
+            EventDefinition shipsChanged = api.Events.FirstOrDefault(e => e.Name == "ShipsChanged");
+            Check(shipsChanged != null && shipsChanged.EventType.FullName == "System.Action" && shipsChanged.AddMethod.IsPublic && shipsChanged.AddMethod.IsStatic,
+                "public static event System.Action ShipsChanged");
+        }
 
         // Fleet Battle's match rules for CUSTOM ships (Void Crew Fleet 0.3.0 on); FleetLink uses them only when all are there.
         Console.WriteLine("Void Crew Fleet's match rules API (FleetLink looks these up by name):");
@@ -344,6 +369,16 @@ internal static class Program
             "ship 2's own layouts survive a save and load");
         object old = deserialize.Invoke(null, new object[] { "{\"Version\":1,\"Ships\":{},\"CustomRuns\":[]}", store });
         Check(store.GetField("SecondShips").GetValue(old) is IDictionary, "a 0.3.0 save file loads, with no ship 2 layouts");
+        // 0.9.0: ships 3 to 6's own layouts, by ship number, then ship type.
+        var more = (IDictionary)store.GetField("MoreShips").GetValue(file);
+        IDictionary shipFive = (IDictionary)Activator.CreateInstance(typeof(Dictionary<,>).MakeGenericType(typeof(string), config));
+        shipFive["4bc2ff9e1d156c94a9c94286a7aaa79b"] = copy;
+        more["5"] = shipFive;
+        reloaded = deserialize.Invoke(null, new object[] { (string)serialize.Invoke(null, new[] { file }), store });
+        var moreBack = (IDictionary)store.GetField("MoreShips").GetValue(reloaded);
+        Check(moreBack.Count == 1 && moreBack.Contains("5") && ((IDictionary)moreBack["5"]).Contains("4bc2ff9e1d156c94a9c94286a7aaa79b"),
+            "ships 3 to 6's own layouts survive a save and load");
+        Check(store.GetField("MoreShips").GetValue(old) is IDictionary, "a 0.8.0 save file loads, with no layouts for ships 3 to 6");
 
         // 0.5.0: the fabricator's starting alloys and level. Older files (and older versions on other PCs) leave them out.
         Check((int)config.GetField("Alloys").GetValue(copy) == -1 && (int)config.GetField("FabricatorLevel").GetValue(copy) == 0,
@@ -415,7 +450,7 @@ internal static class Program
         Check((int)config.GetField("Alloys").GetValue(clean) == -1 && (int)config.GetField("FabricatorLevel").GetValue(clean) == 1, "alloys and fabricator level from another player are kept in range");
 
         Type sync = plugin.GetType("VoidCrewShipCustomizer.RoomSync", true);
-        Check((int)sync.GetField("Protocol").GetValue(null) == 3, "players are tagged with protocol 3 (0.8.0: changes are merged part by part)");
+        Check((int)sync.GetField("Protocol").GetValue(null) == 4, "players are tagged with protocol 4 (0.9.0: ships 3 to 6, and the host says whether it runs Fleet)");
         Type editType = plugin.GetType("VoidCrewShipCustomizer.RoomSync+RoomEdit", true);
         object roomEdit = Activator.CreateInstance(editType);
         editType.GetField("Room").SetValue(roomEdit, "a room");
@@ -453,10 +488,16 @@ internal static class Program
         MethodInfo parse = sync.GetMethod("TryParseLayoutKey", BindingFlags.NonPublic | BindingFlags.Static);
         var parsed = new object[] { key, null, null };
         Check((bool)parse.Invoke(null, parsed) && (int)parsed[1] == 2 && parsed[2].ToString() == "4bc2ff9e1d156c94a9c94286a7aaa79b", "that name reads back as ship 2, Destroyer");
-        foreach (string other in new[] { "SC_Layout3_4bc2ff9e1d156c94a9c94286a7aaa79b", "SC_Layout1", "SC_Layout1_", "SC_Custom" })
+        parsed = new object[] { "SC_Layout6_4bc2ff9e1d156c94a9c94286a7aaa79b", null, null };
+        Check((bool)parse.Invoke(null, parsed) && (int)parsed[1] == 6, "ship 6's (Void Crew Fleet 0.4.0) reads back as ship 6");
+        foreach (string other in new[] { "SC_Layout7_4bc2ff9e1d156c94a9c94286a7aaa79b", "SC_Layout0_4bc2ff9e1d156c94a9c94286a7aaa79b", "SC_Layout1", "SC_Layout1_", "SC_Custom" })
         {
             Check(!(bool)parse.Invoke(null, new object[] { other, null, null }), "\"" + other + "\" is not taken for a shared loadout");
         }
+        MethodInfo customKey = sync.GetMethod("CustomKeyOf");
+        Check((string)customKey.Invoke(null, new object[] { 1 }) == "SC_Custom" && (string)customKey.Invoke(null, new object[] { 2 }) == "SC_Custom2" &&
+              (string)customKey.Invoke(null, new object[] { 6 }) == "SC_Custom6",
+            "each ship's CUSTOM choice has its room property: SC_Custom (ship 1, as before), SC_Custom2 (as before) to SC_Custom6");
 
         // Ship Customizer on its own: no Void Crew Fleet, so nothing for a second ship and no team rules.
         Console.WriteLine("Without Void Crew Fleet:");
@@ -469,14 +510,31 @@ internal static class Program
         Check(fleet.GetMethod("TeamNameOfShip").Invoke(null, new object[] { 2 }) == null && fleet.GetMethod("ShipColor").Invoke(null, new object[] { 2 }) == null,
             "no team names or colours");
         Type api = plugin.GetType("VoidCrewShipCustomizer.ShipCustomizerApi", true);
+        PropertyInfo terminalShip = plugin.GetType("VoidCrewShipCustomizer.CustomLoadouts", true).GetProperty("TerminalShip");
         api.GetMethod("SetTerminalShip").Invoke(null, new object[] { 2 });
-        Check((int)plugin.GetType("VoidCrewShipCustomizer.CustomLoadouts", true).GetField("TerminalShip").GetValue(null) == 1, "the terminal stays on ship 1 when asked for ship 2");
+        Check((int)terminalShip.GetValue(null, null) == 1, "the terminal stays on ship 1 when asked for ship 2");
+        api.GetMethod("SetTerminalShip").Invoke(null, new object[] { 5 });
+        Check((int)terminalShip.GetValue(null, null) == 1, "the terminal stays on ship 1 when asked for ship 5");
         object destroyerCustom = Activator.CreateInstance(guid, "7e466b9b294059d15d1dd623f38fb589");
         var refusal = (string)api.GetMethod("CheckShip2").Invoke(null, new[] { destroyerCustom, (object)1 });
         Check(refusal != null && refusal.Contains("Fleet"), "ship 2 can't be given a CUSTOM loadout (\"" + refusal + "\")");
         Check(api.GetMethod("BuildShip2").Invoke(null, new[] { destroyerCustom }) == null, "no ship 2 is built");
         Check((int)api.GetMethod("GetShip2Alloys").Invoke(null, new[] { destroyerCustom }) == -1, "ship 2 has no starting alloys of its own");
         Check(!(bool)fleet.GetProperty("ReadsShip2Alloys").GetValue(null, null), "the FABRICATOR menu doesn't offer ship 2's alloys");
+        // 0.9.0: ships 3 to 6 stay off and out of sight too.
+        refusal = (string)api.GetMethod("CheckShip").Invoke(null, new[] { (object)4, destroyerCustom, (object)1 });
+        Check(refusal != null && refusal.Contains("Fleet"), "ship 4 can't be given a CUSTOM loadout (\"" + refusal + "\")");
+        Check(api.GetMethod("BuildShip").Invoke(null, new[] { (object)4, destroyerCustom }) == null && (int)api.GetMethod("GetShipAlloys").Invoke(null, new[] { (object)4, destroyerCustom }) == -1,
+            "no ship 4 is built, and it has no starting alloys of its own");
+        PropertyInfo isNull = guid.GetProperty("IsNull");
+        api.GetMethod("SetShip").Invoke(null, new[] { (object)3, destroyerCustom });
+        Check((bool)isNull.GetValue(plugin.GetType("VoidCrewShipCustomizer.CustomLoadouts", true).GetMethod("ActiveShipOf").Invoke(null, new object[] { 3 }), null),
+            "ship 3 can't be set to use CUSTOM");
+        Check((int)fleet.GetProperty("ShipCount").GetValue(null, null) == 1 && !(bool)fleet.GetProperty("KnowsManyShips").GetValue(null, null), "there is one player ship");
+        Check((string)fleet.GetMethod("ShipName").Invoke(null, new object[] { 3 }) == "SHIP 3" && !(bool)fleet.GetProperty("IsTeamMatch").GetValue(null, null),
+            "ships have plain names, and there is no Fleet Battle");
+        Check((bool)isNull.GetValue(fleet.GetMethod("HullOfShip").Invoke(null, new object[] { 1 }), null), "no ship has to be of a given type");
+        Check(api.GetMethod("GetDefaultLoadout").Invoke(null, new[] { destroyer }) == null, "GetDefaultLoadout answers (with nothing) before the game has loaded, without an error");
         Check(!(bool)fleet.GetProperty("ShipRulesActive").GetValue(null, null) && (bool)fleet.GetMethod("IsTierAllowed").Invoke(null, new object[] { 3 }) &&
               (bool)fleet.GetMethod("IsCategoryAllowed").Invoke(null, new object[] { "WEAPONS" }) && (bool)fleet.GetMethod("IsItemAllowed").Invoke(null, new object[] { "w:0123456789abcdef0123456789abcdef" }) &&
               (int)fleet.GetProperty("FabricatorMaxLevel").GetValue(null, null) == 2 && (int)fleet.GetProperty("MaxStartAlloys").GetValue(null, null) == int.MaxValue,

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.0
+
+- **Up to 6 CUSTOM ships with Void Crew Fleet 0.4.0**: up to 3 ships in co-op, and up to 3 a team in a Fleet Battle.
+  - Every ship has its own CUSTOM layout, fabricator level and starting alloys, set up under that ship on the terminal.
+  - In co-op a ship follows ship 1's CUSTOM until it is changed. LOAD LOADOUT can copy any other ship's CUSTOM once.
+  - In a Fleet Battle the odd ships are BLUE's and the even ships RED's. Only a ship's own team can change it.
+  - No ship follows or copies the other team's CUSTOM. An unchanged ship starts from its type's default loadout.
+    Before, RED's ship 2 showed BLUE's ship 1 CUSTOM until it was changed.
+  - When the host makes a ship a given type, only that type's CUSTOM is offered for it, and other types are refused.
+  - CUSTOM on ships 3 to 6 needs everyone in the room on 0.9.0 or newer; the reason names who isn't.
+    Ships 1 and 2 keep working with older versions.
+  - Ships that copy ship 1 in co-op get its fabricator level and contents. They are recognised as the very ship 1 loadout,
+    so a plain ROOKIE ship is never mistaken for a copy of an unchanged CUSTOM ship.
+- **Void Crew Fleet's features only apply when the host runs Fleet too.** Before, a player with Fleet could see Fleet
+  features in a room whose host doesn't run it. Now, without Fleet on the host, Ship Customizer works exactly as it does
+  without Fleet: ship 1 only, no team or match rules, nothing of Fleet's on the terminal.
+- For other mods: `GetDefaultLoadout`, `CheckShip`, `SetShip`, `BuildShip`, `GetShipAlloys` and `ShipCustomCancelled`
+  take ships 2 to 6. The ship 2 members stay.
+
 ## 0.8.0
 
 - **Several players can change the same ship at once.**

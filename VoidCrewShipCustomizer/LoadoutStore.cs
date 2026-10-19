@@ -101,8 +101,13 @@ namespace VoidCrewShipCustomizer
         {
             public int Version = 1;
             public Dictionary<string, HullConfig> Ships = new Dictionary<string, HullConfig>();
-            /// <summary>Ship 2's own CUSTOM loadouts (Void Crew Fleet), by ship. Files from 0.3.0 don't have it.</summary>
+            /// <summary>Ship 2's own CUSTOM loadouts (Void Crew Fleet), by ship type. Files from 0.3.0 don't have it.</summary>
             public Dictionary<string, HullConfig> SecondShips = new Dictionary<string, HullConfig>();
+            /// <summary>
+            /// Ships 3 to 6's own CUSTOM loadouts (Void Crew Fleet 0.4.0), by player ship ("3" to "6"), then ship type.
+            /// Files from 0.8.0 and older don't have it.
+            /// </summary>
+            public Dictionary<string, Dictionary<string, HullConfig>> MoreShips = new Dictionary<string, Dictionary<string, HullConfig>>();
             public List<string> CustomRuns = new List<string>();
         }
 
@@ -110,6 +115,8 @@ namespace VoidCrewShipCustomizer
         private static StoreFile _file;
         /// <summary>The file is there but couldn't be read: it is never overwritten this session.</summary>
         private static bool _readOnly;
+        /// <summary>Each ship type's stand-in game loadout as a CUSTOM loadout, read once.</summary>
+        private static readonly Dictionary<GUIDUnion, HullConfig> Defaults = new Dictionary<GUIDUnion, HullConfig>();
 
         public static string Folder
         {
@@ -144,50 +151,95 @@ namespace VoidCrewShipCustomizer
                 if (_file == null) _file = new StoreFile();
                 if (_file.Ships == null) _file.Ships = new Dictionary<string, HullConfig>();
                 if (_file.SecondShips == null) _file.SecondShips = new Dictionary<string, HullConfig>();
+                if (_file.MoreShips == null) _file.MoreShips = new Dictionary<string, Dictionary<string, HullConfig>>();
                 if (_file.CustomRuns == null) _file.CustomRuns = new List<string>();
                 return _file;
             }
         }
 
         /// <summary>
-        /// The player's CUSTOM loadout for a ship: ship 1's (a copy of the ship's first loadout until they change it), or
-        /// ship 2's own (Void Crew Fleet), which is ship 1's until it is changed under SHIP 2.
+        /// The player's CUSTOM loadout of a ship type for a player ship. Ship 1's is a copy of the type's stand-in game
+        /// loadout until it is changed. Ships 2 to 6 (Void Crew Fleet) have their own once changed under that ship; until
+        /// then they follow ship 1's, except in a Fleet Battle, where they start from the stand-in game loadout, so no team
+        /// sees or follows another team's choices.
         /// </summary>
         public static HullConfig Get(HullInfo hull, int ship = 1)
         {
             HullConfig config;
-            if (ship == 2) return File.SecondShips.TryGetValue(hull.ShipGuid.AsHex(), out config) && config != null ? Normalize(config) : Get(hull);
+            if (ship >= 2)
+            {
+                if (TryGetOwn(hull, ship, out config)) return config;
+                return FleetLink.IsTeamMatch ? Default(hull) : Get(hull);
+            }
             if (File.Ships.TryGetValue(hull.ShipGuid.AsHex(), out config) && config != null) return Normalize(config);
             config = FromGameLoadout(hull, hull.BasePreset);
             File.Ships[hull.ShipGuid.AsHex()] = config;
             return config;
         }
 
-        /// <summary>The loadout to change: ship 2 gets its own copy of ship 1's the first time it is changed.</summary>
+        /// <summary>The loadout to change: ships 2 to 6 get their own copy of what they show the first time they are changed.</summary>
         public static HullConfig GetForEdit(HullInfo hull, int ship)
         {
             HullConfig own;
-            if (ship != 2) return Get(hull);
-            return File.SecondShips.TryGetValue(hull.ShipGuid.AsHex(), out own) && own != null ? Normalize(own) : Get(hull).Clone();
+            if (ship < 2) return Get(hull);
+            return TryGetOwn(hull, ship, out own) ? own : Get(hull, ship).Clone();
         }
 
         public static void Set(HullInfo hull, HullConfig config, int ship = 1)
         {
-            (ship == 2 ? File.SecondShips : File.Ships)[hull.ShipGuid.AsHex()] = config;
+            OwnLayouts(ship, true)[hull.ShipGuid.AsHex()] = config;
             Save();
         }
 
-        /// <summary>Ship 2 follows ship 1's loadout again.</summary>
-        public static void ForgetShip2(HullInfo hull)
+        /// <summary>Ship 2 to 6 follows ship 1's loadout again (or, in a Fleet Battle, starts again from the stand-in's).</summary>
+        public static void Forget(HullInfo hull, int ship)
         {
-            if (File.SecondShips.Remove(hull.ShipGuid.AsHex())) Save();
+            Dictionary<string, HullConfig> own = ship >= 2 ? OwnLayouts(ship, false) : null;
+            if (own != null && own.Remove(hull.ShipGuid.AsHex())) Save();
         }
 
-        /// <summary>Whether ship 2 has its own loadout for this ship (rather than following ship 1's).</summary>
-        public static bool HasOwnShip2(HullInfo hull)
+        /// <summary>Whether ship 2 to 6 has its own loadout for this ship type (rather than following ship 1's).</summary>
+        public static bool HasOwn(HullInfo hull, int ship)
         {
             HullConfig own;
-            return File.SecondShips.TryGetValue(hull.ShipGuid.AsHex(), out own) && own != null;
+            return ship >= 2 && TryGetOwn(hull, ship, out own);
+        }
+
+        private static bool TryGetOwn(HullInfo hull, int ship, out HullConfig config)
+        {
+            config = null;
+            Dictionary<string, HullConfig> own = OwnLayouts(ship, false);
+            if (own == null || !own.TryGetValue(hull.ShipGuid.AsHex(), out config) || config == null) return false;
+            Normalize(config);
+            return true;
+        }
+
+        /// <summary>A player ship's loadouts by ship type: ship 1's, ship 2's own, or ship 3 to 6's own (made when asked to).</summary>
+        private static Dictionary<string, HullConfig> OwnLayouts(int ship, bool create)
+        {
+            if (ship <= 1) return File.Ships;
+            if (ship == 2) return File.SecondShips;
+            Dictionary<string, HullConfig> layouts;
+            string key = ship.ToString();
+            if (!File.MoreShips.TryGetValue(key, out layouts) || layouts == null)
+            {
+                if (!create) return null;
+                layouts = new Dictionary<string, HullConfig>();
+                File.MoreShips[key] = layouts;
+            }
+            return layouts;
+        }
+
+        /// <summary>The ship type's stand-in game loadout as a CUSTOM loadout (a fresh copy each time).</summary>
+        public static HullConfig Default(HullInfo hull)
+        {
+            HullConfig config;
+            if (!Defaults.TryGetValue(hull.ShipGuid, out config))
+            {
+                config = FromGameLoadout(hull, hull.BasePreset).Normalized();
+                Defaults[hull.ShipGuid] = config;
+            }
+            return config.Clone();
         }
 
         private static HullConfig Normalize(HullConfig config)

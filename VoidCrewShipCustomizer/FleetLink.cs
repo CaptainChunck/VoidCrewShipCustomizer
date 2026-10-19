@@ -7,13 +7,14 @@ using UnityEngine;
 namespace VoidCrewShipCustomizer
 {
     /// <summary>
-    /// The optional link to Void Crew Fleet, which adds a second player ship. Ship Customizer never needs it: everything
-    /// for ship 2 (the terminal's SHIP 2, ship 2's CUSTOM loadout and its room properties, ship 2's fabricator level, the
-    /// Fleet Battle team rules) only works while Fleet is installed and turned on, and stays off otherwise.
+    /// The optional link to Void Crew Fleet, which adds more player ships (up to 3 in co-op, up to 3 a team in a Fleet
+    /// Battle). Ship Customizer never needs it: everything for ships 2 to 6 (the terminal's other ships, their CUSTOM
+    /// loadouts and room properties, their fabricator levels, the Fleet Battle team and match rules) only works while
+    /// Fleet runs here and the room's host runs it too, and stays off and out of sight otherwise.
     ///
     /// Fleet's team rules come from its public FleetApi, reached through reflection like Fleet reaches ShipCustomizerApi:
-    /// in Fleet Battle, ship 1 belongs to the BLUE team and ship 2 to the RED team, and only a ship's own team may change
-    /// its loadout. Without Fleet, or with a Fleet without that API, every player may change every ship.
+    /// in a Fleet Battle the odd ships belong to the BLUE team and the even ships to the RED team, and only a ship's own
+    /// team may change its loadout. Without Fleet, or with a Fleet without that API, every player may change every ship.
     /// </summary>
     internal static class FleetLink
     {
@@ -27,6 +28,8 @@ namespace VoidCrewShipCustomizer
         private static MethodInfo _isTeamMatch, _teamOfShip, _canEditShip, _shipColor;
         // Fleet Battle's rules for CUSTOM ships (Void Crew Fleet 0.3.0 on); each one optional.
         private static MethodInfo _rulesActive, _tierAllowed, _categoryAllowed, _itemAllowed, _fabricatorMaxLevel, _maxStartAlloys;
+        // Ships 3 to 6 (Void Crew Fleet 0.4.0 on); each one optional.
+        private static MethodInfo _shipCount, _hullOfShip, _shipName;
 
         /// <summary>
         /// Whether Void Crew Fleet gives ship 2 the starting alloys of its own CUSTOM loadout (it calls
@@ -42,14 +45,75 @@ namespace VoidCrewShipCustomizer
             }
         }
 
-        /// <summary>Whether Void Crew Fleet is installed and turned on. Until the hub has loaded, false.</summary>
+        /// <summary>
+        /// Whether Void Crew Fleet's features apply: Fleet is installed and turned on on this PC, and the room's host runs it
+        /// too (see RoomSync.HostRunsFleet). When this is false, Ship Customizer works exactly as it does without Fleet.
+        /// Until the hub has loaded, false.
+        /// </summary>
         public static bool Running
+        {
+            get
+            {
+                Look();
+                return _running && RoomSync.HostRunsFleet();
+            }
+        }
+
+        /// <summary>Whether Void Crew Fleet is installed and turned on on this PC (what a host tells its room).</summary>
+        public static bool RunningHere
         {
             get
             {
                 Look();
                 return _running;
             }
+        }
+
+        /// <summary>Whether this Void Crew Fleet knows ships 3 to 6 (0.4.0 on): its ShipCount is there.</summary>
+        public static bool KnowsManyShips
+        {
+            get
+            {
+                Look();
+                return _shipCount != null;
+            }
+        }
+
+        /// <summary>
+        /// The player ships the room plans for its next mission, or flies in the running one: 1 without Void Crew Fleet (or
+        /// while the host doesn't run it), 2 with a Fleet older than 0.4.0 (it only knows ship 2), otherwise Fleet's own
+        /// count, up to <see cref="CustomLoadouts.MaxShips"/>.
+        /// </summary>
+        public static int ShipCount
+        {
+            get
+            {
+                if (!Running) return 1;
+                if (_shipCount == null) return 2;
+                return Math.Max(1, Math.Min(Call(_shipCount, 1), CustomLoadouts.MaxShips));
+            }
+        }
+
+        /// <summary>The ship type the host makes a player ship use (Void Crew Fleet 0.4.0), or empty when any type will do.</summary>
+        public static GUIDUnion HullOfShip(int ship)
+        {
+            if (!Running || _hullOfShip == null) return GUIDUnion.Empty();
+            return Call(_hullOfShip, GUIDUnion.Empty(), ship);
+        }
+
+        /// <summary>
+        /// A player ship's name for the terminal and messages: Void Crew Fleet's own ("SHIP 3", "BLUE 2") when it has them,
+        /// otherwise "BLUE 1" or "RED 1" in a Fleet Battle and "SHIP 2" elsewhere.
+        /// </summary>
+        public static string ShipName(int ship)
+        {
+            if (Running && _shipName != null)
+            {
+                string name = Call<string>(_shipName, null, ship);
+                if (!string.IsNullOrEmpty(name)) return name;
+            }
+            string team = TeamNameOfShip(ship);
+            return team != null ? team + " " + ((ship + 1) / 2) : "SHIP " + ship;
         }
 
         /// <summary>
@@ -102,6 +166,7 @@ namespace VoidCrewShipCustomizer
             }
             _readsShip2Alloys = Flag(api, "ReadsShip2Alloys");
             LinkRules(api);
+            LinkShips(api);
             PropertyInfo isTeamMatch = api.GetProperty("IsTeamMatch", BindingFlags.Public | BindingFlags.Static);
             MethodInfo teamOfShip = api.GetMethod("TeamOfShip", new[] { typeof(int) });
             MethodInfo canEditShip = api.GetMethod("CanEditShip", new[] { typeof(int), typeof(int) });
@@ -145,6 +210,24 @@ namespace VoidCrewShipCustomizer
             EventInfo changed = api.GetEvent("ShipRulesChanged", BindingFlags.Public | BindingFlags.Static);
             if (changed != null) changed.AddEventHandler(null, (Action)OnRulesChanged);
             Log.Info("Void Crew Fleet's match rules are linked: in a Fleet Battle, CUSTOM ships keep to them.");
+        }
+
+        /// <summary>
+        /// Ships 3 to 6 (Void Crew Fleet 0.4.0): how many ships the room has, each ship's forced type and its name. ShipCount
+        /// is what counts; the type and name are used when they are there too.
+        /// </summary>
+        private static void LinkShips(Type api)
+        {
+            MethodInfo count = Getter(api, "ShipCount", typeof(int));
+            if (count == null) return;
+            MethodInfo hull = api.GetMethod("HullOfShip", new[] { typeof(int) });
+            MethodInfo name = api.GetMethod("ShipName", new[] { typeof(int) });
+            _hullOfShip = hull != null && hull.ReturnType == typeof(GUIDUnion) ? hull : null;
+            _shipName = name != null && name.ReturnType == typeof(string) ? name : null;
+            _shipCount = count;
+            EventInfo changed = api.GetEvent("ShipsChanged", BindingFlags.Public | BindingFlags.Static);
+            if (changed != null && changed.EventHandlerType == typeof(Action)) changed.AddEventHandler(null, (Action)OnShipsChanged);
+            Log.Info("Void Crew Fleet knows ships 3 to 6: every player ship it adds can use CUSTOM.");
         }
 
         /// <summary>A static property's getter (or, failing that, nothing) of the given type.</summary>
@@ -192,8 +275,10 @@ namespace VoidCrewShipCustomizer
         {
             try
             {
-                // A Fleet Battle starting or ending changes what CUSTOM ships may start with (the match rules).
+                // A Fleet Battle starting or ending changes what CUSTOM ships may start with (the match rules), and whether
+                // ships 2 to 6 follow ship 1's CUSTOM loadout.
                 CustomLoadouts.RefreshAll();
+                CustomLoadouts.ShareChoicesAgain();
                 TerminalUi.OnLoadoutChangedRemotely();
             }
             catch (Exception e)
@@ -215,28 +300,37 @@ namespace VoidCrewShipCustomizer
             }
         }
 
-        /// <summary>True during a Fleet Battle (chosen in the hub, or running).</summary>
-        public static bool IsTeamMatch
+        /// <summary>The room's ships changed (how many, or a ship's forced type).</summary>
+        private static void OnShipsChanged()
         {
-            get
+            try
             {
-                Look();
-                return _isTeamMatch != null && Call(_isTeamMatch, false);
+                CustomLoadouts.OnShipsChanged();
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Updating CUSTOM after the room's ships changed", e);
             }
         }
 
-        /// <summary>Whether this player may change ship 1's or ship 2's loadout: always, outside a Fleet Battle.</summary>
+        // Every member below answers as if there were no Void Crew Fleet while it isn't running here or on the host.
+
+        /// <summary>True during a Fleet Battle (chosen in the hub, or running).</summary>
+        public static bool IsTeamMatch
+        {
+            get { return Running && _isTeamMatch != null && Call(_isTeamMatch, false); }
+        }
+
+        /// <summary>Whether this player may change a ship's loadout: always, outside a Fleet Battle.</summary>
         public static bool CanEditShip(int actorNumber, int ship)
         {
-            Look();
-            return _canEditShip == null || Call(_canEditShip, true, actorNumber, ship);
+            return !Running || _canEditShip == null || Call(_canEditShip, true, actorNumber, ship);
         }
 
         /// <summary>"BLUE" or "RED": the team a ship belongs to in a Fleet Battle; null otherwise.</summary>
         public static string TeamNameOfShip(int ship)
         {
-            Look();
-            if (_teamOfShip == null) return null;
+            if (!Running || _teamOfShip == null) return null;
             int team = Call(_teamOfShip, -1, ship);
             return team == 0 ? "BLUE" : (team == 1 ? "RED" : null);
         }
@@ -244,8 +338,7 @@ namespace VoidCrewShipCustomizer
         /// <summary>A ship's team colour in a Fleet Battle; null otherwise.</summary>
         public static Color? ShipColor(int ship)
         {
-            Look();
-            if (_shipColor == null) return null;
+            if (!Running || _shipColor == null) return null;
             Color color = Call(_shipColor, Color.clear, ship);
             return color.a > 0f ? color : (Color?)null;
         }
@@ -253,12 +346,10 @@ namespace VoidCrewShipCustomizer
         /// <summary>Whether a Fleet Battle has rules for CUSTOM ships that restrict something.</summary>
         public static bool ShipRulesActive
         {
-            get
-            {
-                Look();
-                return _rulesActive != null && Call(_rulesActive, false);
-            }
+            get { return Running && _rulesActive != null && Call(_rulesActive, false); }
         }
+
+        // The rules themselves: only asked while ShipRulesActive is true (which is false without Fleet running).
 
         public static bool IsTierAllowed(int tier)
         {

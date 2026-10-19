@@ -48,13 +48,20 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
     everything), then change what you like.
 - **Pop-up windows like the game's own**: the pickers and the storage-rack window are built from the game's pop-up and
   list styles (its dark-grey window with the light-blue outline, list rows and buttons).
-- **Works with [Void Crew Fleet](https://thunderstore.io/c/void-crew/)**: Fleet's second ship can use CUSTOM too, with
-  a layout and fabricator level of its own (the same as ship 1's until you change it under SHIP 2). Choose CUSTOM with
-  SELECT under SHIP 2 for ship 2 to use it; left AS SHIP 1, ship 2 starts as a copy of ship 1. Any player can set it up.
-  With Void Crew Fleet 0.2.1 or newer, ship 2 can also start with alloys of its own; with an older Fleet, both ships
-  start with the alloys of ship 1's CUSTOM loadout.
-  - In a **Fleet Battle** (PvP), ship 1 belongs to the BLUE team and ship 2 to the RED team: only a ship's own team can
-    change its CUSTOM loadout, and the other team sees it view-only. The CUSTOM pop-ups take the team's colour.
+- **Works with [Void Crew Fleet](https://thunderstore.io/c/void-crew/)**: every player ship Fleet adds can use CUSTOM
+  too: up to 3 ships in co-op and up to 3 a team in a Fleet Battle with Void Crew Fleet 0.4.0 or newer (ship 2 with an
+  older Fleet). Each ship has a CUSTOM layout and fabricator level of its own, set up under that ship on the terminal,
+  and SELECT under that ship makes it use CUSTOM. Any player can set the ships up. With Void Crew Fleet 0.2.1 or newer,
+  each ship can also start with alloys of its own.
+  - In co-op, a ship's layout is the same as ship 1's until you change it under that ship (LOAD LOADOUT > SAME AS SHIP 1
+    goes back). LOAD LOADOUT can also copy another ship's CUSTOM once.
+  - CUSTOM on ships 3 to 6 needs everyone in the room on Ship Customizer 0.9.0 or newer. Ships 1 and 2 work with older
+    versions as before.
+  - When the host makes a ship a given type (Void Crew Fleet 0.4.0), only that type's CUSTOM is offered for it.
+  - In a **Fleet Battle** (PvP), the odd ships (BLUE 1, 2, 3) belong to the BLUE team and the even ships (RED 1, 2, 3)
+    to the RED team: only a ship's own team can change its CUSTOM loadout, and the other team sees it view-only. The
+    CUSTOM pop-ups take the team's colour. No ship follows or copies the other team's CUSTOM: a ship's layout starts from
+    its type's default loadout until its team changes it.
   - **Match rules keep a Fleet Battle even.** A CUSTOM ship never starts with relics, the Armory Exchange Key, extra
     Fabricator modules or the game's unfinished Placeholder weapons; the menus leave them out (no RELICS tab). Relics
     found during the match are yours to use.
@@ -64,8 +71,8 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
   - A **MATCH RULES** button above the CUSTOM section shows the rules and what the loadout has that breaks them
     (BREAKS MATCH RULES), and can take it off. When the mission starts, the host takes off whatever still breaks them
     (your saved loadouts keep everything) and everyone with Ship Customizer is told in the chat.
-  - Without Fleet (not installed, or turned off in its config), all of this stays off and Ship Customizer works on its
-    own.
+  - Fleet's features only apply when the host runs Fleet too. Without Fleet (not installed, turned off in its config, or
+    not running on the host), all of this stays off and out of sight, and Ship Customizer works on its own.
 - Your CUSTOM loadouts are saved per ship in
   `%USERPROFILE%\AppData\LocalLow\Hutlihut Games ApS\Void Crew\ShipCustomizer\custom-loadouts.json`, and the loadouts
   you save with SAVE LOADOUT in `saved-loadouts.json` next to it.
@@ -156,13 +163,14 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
   never used for this.
 - Picking CUSTOM selects the loadout it stands in for (`HubShipManager.SelectShip`, which also sends another player's
   pick to the host), so no player ever receives an unknown loadout id. Modded players learn about CUSTOM through the room
-  property `SC_Custom` (`SC_Custom2` for Fleet's ship 2); `SC_Run` marks a CUSTOM mission and `SC_Closed` a room closed
-  for one. Each modded player sets the player property `SC_Player` (2 from 0.5.0, 1 before).
-- Shared editing (0.5.0): once a 0.5.0 player is in the room, the host shares each ship's CUSTOM loadout as the room
-  properties `SC_Layout1_<ship GUID>` and `SC_Layout2_<ship GUID>` (ship 2's only when it has its own). Other players
-  send a change as the player property `SC_Edit1_<ship GUID>` / `SC_Edit2_<ship GUID>`: the whole loadout, addressed to
-  the room and the host. The host keeps only what the ship has and what its settings allow (`Sanitize`), saves it and
-  shares it again.
+  property `SC_Custom` (`SC_Custom2` to `SC_Custom6` for Fleet's ships); `SC_Run` marks a CUSTOM mission and `SC_Closed`
+  a room closed for one. Each modded player sets the player property `SC_Player` to its protocol (4 from 0.9.0, 3 from
+  0.8.0, 2 from 0.5.0, 1 before).
+- Shared editing (0.5.0): once a 0.5.0 player is in the room, the host shares each ship type's CUSTOM loadout per player
+  ship as the room properties `SC_Layout<n>_<ship GUID>`, n from 1 to 6 (ships 2 to 6 only when they have their own).
+  Other players send a change as the player property `SC_Edit<n>_<ship GUID>`: the whole loadout, addressed to the room
+  and the host. The host keeps only what the ship has and what its settings allow (`Sanitize`), saves it and shares it
+  again.
 - Merged changes (0.8.0, protocol 3, `LayoutMerge`): a change also carries `Base`, the host's loadout as the player last
   read it. The host merges it part by part (each hardpoint group with its module's contents, each rack slot, the
   homunculus, the alloys, the fabricator level): a part the player changed is taken unless someone else changed it since
@@ -178,9 +186,15 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
 - During a CUSTOM run, a prefix on `CarryablesSocket.DoesAccept` lets storage rack slots take any item. The game checks it
   only on the player putting the item in; at mission start it fills the racks without checking.
 - Void Crew Fleet is optional and found through reflection (`FleetLink`): installed and turned on (its General > Enabled),
-  looked up once the hub has loaded. Its `VoidCrewFleet.FleetApi` (`IsTeamMatch`, `TeamOfShip`, `CanEditShip`,
-  `ShipColor`, `TeamsChanged`) gives the Fleet Battle team rules. The terminal follows them, and the host ignores changes
-  from the wrong team. Without Fleet, ship 2 and the team rules are off.
+  looked up once the hub has loaded. Its features only apply while the host runs it too: a 0.9.0 host says so in the
+  room property `SC_Fleet` (with an older host, Fleet's own checks decide). Its `VoidCrewFleet.FleetApi` (`IsTeamMatch`,
+  `TeamOfShip`, `CanEditShip`, `ShipColor`, `TeamsChanged`) gives the Fleet Battle team rules. The terminal follows them,
+  and the host refuses changes from the wrong team. Fleet 0.4.0's `ShipCount`, `HullOfShip`, `ShipName` and
+  `ShipsChanged` add ships 3 to 6 and the types the host forces. Without Fleet, its ships and the team rules are off.
+- Ships 3 to 6 (0.9.0, protocol 4): their own layouts are saved in `custom-loadouts.json` under `MoreShips`. In co-op a
+  ship without one follows ship 1's; in a Fleet Battle it starts from the stand-in game loadout, so no team follows the
+  other's. Fleet 0.4.0 spawns its co-op copies of ship 1 from the very `ShipLoadout` ship 1 got, so the host matches
+  spawned ships to their CUSTOM plans by reference only (by contents only with an older Fleet).
 - Fleet Battle match rules (0.7.0, `MatchRules`): what a Fleet Battle never allows is fixed here (relics, the Armory
   Exchange Key, the Fabricator modules, Placeholder weapons, crates and mods). The host's rules come from Fleet 0.3.0's
   `ShipRulesActive`, `IsTierAllowed`, `IsCategoryAllowed`, `IsItemAllowed`, `FabricatorMaxLevel`, `MaxStartAlloys` and
@@ -200,20 +214,24 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
 
 `VoidCrewShipCustomizer.ShipCustomizerApi` is meant to be reached through reflection (find the plugin with GUID
 `com.captainchunck.voidcrew.shipcustomizer` in `Chainloader.PluginInfos`), so neither mod needs the other. Check
-`ApiVersion` (currently `1`) first. No member throws. Void Crew Fleet uses it for its second ship.
+`ApiVersion` (currently `1`) first. No member throws. Void Crew Fleet uses it for its extra player ships: ship 1 is the
+game's own, ships 2 to 6 are Fleet's (odd ships BLUE, even ships RED in a Fleet Battle).
 
 | Member | What it does |
 |---|---|
 | `const int ApiVersion` | Raised when a member changes in a way older callers don't understand. |
 | `ShipLoadoutDataDef GetDef(GUIDUnion)` | The CUSTOM definition behind a GUID (created on first use), or null if it isn't CUSTOM. |
 | `ShipLoadoutDataDef GetStandIn(GUIDUnion)` | The game loadout a CUSTOM loadout is built on and shown as to players without the mod. |
-| `void SetTerminalShip(int)` | 1 or 2: which ship's CUSTOM layout the loadout terminal shows, edits and saves. |
-| `string CheckShip2(GUIDUnion, int actorNumber)` | Host: null if that player may give ship 2 this CUSTOM loadout now (any player with the mod from 0.5.0; only the host before), otherwise the reason. |
-| `void SetShip2(GUIDUnion)` | Host: ship 2 now uses this loadout (CUSTOM or not); other players with the mod see its layout. |
-| `ShipLoadout BuildShip2(GUIDUnion)` | Host, from a `GSIngame.TransitionTo` prefix that runs after this plugin's: ship 2's CUSTOM `ShipLoadout`, or null (use the stand-in). Makes the run a CUSTOM run. |
-| `int GetShip2Alloys(GUIDUnion)` | Host, at mission start: the alloys ship 2's CUSTOM loadout starts with, or -1 for the game's own amount (0.5.1). In a Fleet Battle, within the match rules (0.7.0). |
+| `ShipLoadoutDataDef GetDefaultLoadout(GUIDUnion shipGuid)` | A ship type's default game loadout (the one CUSTOM stands in with: ROOKIE, or the lowest-rank listed one; never a challenge or test loadout), or null (0.9.0). |
+| `void SetTerminalShip(int)` | 1 to 6: which ship's CUSTOM layout the loadout terminal shows, edits and saves (3 to 6 from 0.9.0). |
+| `string CheckShip(int ship, GUIDUnion, int actorNumber)` | Host: null if that player may give ship 2 to 6 this CUSTOM loadout now, otherwise the reason (0.9.0). Ships 3 to 6 need everyone on 0.9.0 or newer; a ship the host makes a given type only takes that type's CUSTOM. |
+| `void SetShip(int ship, GUIDUnion)` | Host: ship 2 to 6 now uses this loadout (CUSTOM or not); other players with the mod see its layout (0.9.0). |
+| `ShipLoadout BuildShip(int ship, GUIDUnion)` | Host, from a `GSIngame.TransitionTo` prefix that runs after this plugin's: ship 2 to 6's CUSTOM `ShipLoadout`, or null (use the stand-in). Makes the run a CUSTOM run; Fleet Battle match rules apply (0.9.0). |
+| `int GetShipAlloys(int ship, GUIDUnion)` | Host, at mission start: the alloys ship 2 to 6's CUSTOM loadout starts with, or -1 for the game's own amount (0.9.0). In a Fleet Battle, within the match rules. |
+| `event Action<int> ShipCustomCancelled` | Host: that ship's (2 to 6) CUSTOM was switched off in the hub because someone without the mod (or, for ships 3 to 6, with a version older than 0.9.0) joined (0.9.0). |
+| `string CheckShip2(GUIDUnion, int)`, `void SetShip2(GUIDUnion)`, `ShipLoadout BuildShip2(GUIDUnion)`, `int GetShip2Alloys(GUIDUnion)` | The same for ship 2 (0.4.0 to 0.5.1; kept for older Fleets). |
+| `event Action Ship2CustomCancelled` | Ship 2's CUSTOM was switched off; raised together with `ShipCustomCancelled(2)` (kept for older Fleets). |
 | `string[] GetRuleOptions()` | What a Fleet Battle's match rules can allow or refuse, one `code\|category\|tier\|name` line each; empty until the hub has loaded (0.7.0). |
-| `event Action Ship2CustomCancelled` | Host: ship 2's CUSTOM was switched off in the hub because someone without the mod joined. |
 
 ## License
 

@@ -116,11 +116,7 @@ namespace VoidCrewShipCustomizer
             _toolbar = null;
             _toast = null;
             Hooks.Clear();
-            if (CustomLoadouts.TerminalShip != 1)
-            {
-                CustomLoadouts.TerminalShip = 1;
-                CustomLoadouts.RefreshAll();
-            }
+            CustomLoadouts.ResetTerminalShip();
         }
 
         /// <summary>Another plugin switched the ship the terminal sets up: close pop-ups made for the other ship and redraw.</summary>
@@ -686,9 +682,10 @@ namespace VoidCrewShipCustomizer
                 if (broken > 0) rules.style.color = Ui.Warning;
             }
             var notes = new List<string>();
-            string team = FleetLink.TeamNameOfShip(CustomLoadouts.TerminalShip);
-            if (team != null) notes.Add(team + " TEAM'S SHIP");
-            else if (CustomLoadouts.TerminalShip == 2) notes.Add("SHIP 2");
+            // Void Crew Fleet's ships by name ("SHIP 2", "BLUE 1"); nothing of the kind without Fleet.
+            int ship = CustomLoadouts.TerminalShip;
+            if (ship >= 2 || FleetLink.IsTeamMatch) notes.Add(FleetLink.ShipName(ship));
+            if (CustomLoadouts.WrongType(ship, hull) != null) notes.Add("WRONG SHIP TYPE");
             if (!editable) notes.Add("VIEW ONLY");
             else if (CustomLoadouts.EditsGoToHost(hull) || RoomSync.SharingLayouts) notes.Add("SHARED");
             AddToolbarHeader("CUSTOM", string.Join(" · ", notes.ToArray()), TeamColor() ?? Ui.Gold);
@@ -972,9 +969,10 @@ namespace VoidCrewShipCustomizer
         private static void OpenFabricatorPicker(HullInfo hull)
         {
             HullConfig config = CustomLoadouts.ConfigToShow(hull);
-            bool shipTwo = CustomLoadouts.TerminalShip == 2;
-            // Ship 2's alloys are kept by Void Crew Fleet: offered only when Fleet takes them from ship 2's CUSTOM loadout.
-            bool alloys = !shipTwo || FleetLink.ReadsShip2Alloys;
+            int ship = CustomLoadouts.TerminalShip;
+            // The other ships' alloys are kept by Void Crew Fleet: offered only when Fleet takes them from their CUSTOM
+            // loadouts (ship 2 with ReadsShip2Alloys, every ship with a Fleet that knows ships 3 to 6).
+            bool alloys = ship < 2 || FleetLink.ReadsShip2Alloys || FleetLink.KnowsManyShips;
             var entries = new List<PickerPanel.Entry>();
             if (alloys)
             {
@@ -1005,8 +1003,8 @@ namespace VoidCrewShipCustomizer
                 }, MatchRules.FabricatorLevelAllowed(level)));
             }
             string subtitle = !alloys
-                ? "Ship 2's fabricator level. Its own starting alloys need a newer Void Crew Fleet; until then both ships start with ship 1's."
-                : (shipTwo ? "What ship 2's fabricator starts with" : "What the ship's fabricator starts with") +
+                ? FleetLink.ShipName(ship) + "'s fabricator level. Its own starting alloys need a newer Void Crew Fleet; until then both ships start with ship 1's."
+                : (ship >= 2 ? "What " + FleetLink.ShipName(ship) + "'s fabricator starts with" : "What the ship's fabricator starts with") +
                   ": alloys to print and upgrade with, and its level. Saved runs keep what they had.";
             if (FleetLink.ShipRulesActive)
             {
@@ -1192,7 +1190,7 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>
         /// Replaces the CUSTOM loadout (or only its storage racks) with one this player saved, one of the game's loadouts,
-        /// or an empty ship; with Void Crew Fleet's ship 2, also ship 1's.
+        /// or an empty ship; with Void Crew Fleet, also another player ship's (only the same team's in a Fleet Battle).
         /// </summary>
         private static void OpenLoadPicker(HullInfo hull, bool storageOnly)
         {
@@ -1207,24 +1205,36 @@ namespace VoidCrewShipCustomizer
                     OnPick = () => PasteShareCode(hull, storageOnly)
                 }
             };
-            if (CustomLoadouts.TerminalShip == 2)
+            int ship = CustomLoadouts.TerminalShip;
+            // In a Fleet Battle no ship follows another: each team keeps its choices to itself.
+            if (ship >= 2 && !FleetLink.IsTeamMatch)
             {
-                bool following = CustomLoadouts.Ship2FollowsShip1(hull);
-                if (!FleetLink.IsTeamMatch) entries.Add(new PickerPanel.Entry
+                bool following = CustomLoadouts.FollowsShip1(hull, ship);
+                entries.Add(new PickerPanel.Entry
                 {
                     Pinned = true,
                     Name = "SAME AS SHIP 1",
-                    Detail = "Ship 2 uses ship 1's CUSTOM loadout and follows its changes.",
+                    Detail = FleetLink.ShipName(ship) + " uses ship 1's CUSTOM loadout and follows its changes.",
                     Current = following,
                     Tag = following ? "NOW" : "",
                     OnPick = following ? (Action)(() => { }) : () => FollowShip1(hull)
                 });
+            }
+            for (int other = 1; other <= FleetLink.ShipCount; other++)
+            {
+                if (other == ship || FleetLink.TeamNameOfShip(other) != FleetLink.TeamNameOfShip(ship)) continue;
+                int from = other;
+                string name = FleetLink.ShipName(from);
                 entries.Add(new PickerPanel.Entry
                 {
                     Pinned = true,
-                    Name = "SHIP 1'S CUSTOM",
-                    Detail = storageOnly ? "Copy ship 1's storage racks once." : "Copy ship 1's CUSTOM loadout once, then change what you like.",
-                    OnPick = () => Edit(hull, c => CopyInto(c, CustomLoadouts.ShipOneConfig(hull).Clone(), storageOnly, "ship 1's CUSTOM"))
+                    Name = name + "'S CUSTOM",
+                    Detail = storageOnly ? "Copy " + name + "'s storage racks once." : "Copy " + name + "'s CUSTOM loadout once, then change what you like.",
+                    OnPick = () =>
+                    {
+                        HullConfig source = CustomLoadouts.LayoutOf(hull, from);
+                        if (source != null) Edit(hull, c => CopyInto(c, source.Clone(), storageOnly, name + "'s CUSTOM"));
+                    }
                 });
             }
             if (CustomLoadouts.EditsGoToHost(hull))
@@ -1493,23 +1503,23 @@ namespace VoidCrewShipCustomizer
             }
             else
             {
-                // In a Fleet Battle a ship 2 that still follows ship 1 keeps its layout as it is, before ship 1 changes.
-                if (ship == 1) CustomLoadouts.KeepShip2Apart(hull);
                 HullConfig config = LoadoutStore.GetForEdit(hull, ship);
                 HullConfig before = config.Clone();
                 change(config);
                 config.Normalized();
                 LoadoutStore.Set(hull, config, ship);
                 CustomLoadouts.NoteHostChange(hull, ship, before, config);
-                CustomLoadouts.OnEdited(hull);
+                CustomLoadouts.OnEdited(hull, 0, 0, ship);
             }
             Redisplay();
             if (_storage != null && _storage.IsOpen) _storage.Refresh();
         }
 
-        /// <summary>Ship 2 goes back to using ship 1's CUSTOM loadout.</summary>
+        /// <summary>Ship 2 to 6 goes back to using ship 1's CUSTOM loadout.</summary>
         private static void FollowShip1(HullInfo hull)
         {
+            int ship = CustomLoadouts.TerminalShip;
+            if (ship < 2) return;
             if (!CustomLoadouts.CanEdit(hull))
             {
                 Toast(CustomLoadouts.WhyNotEditable());
@@ -1517,12 +1527,12 @@ namespace VoidCrewShipCustomizer
             }
             if (CustomLoadouts.EditsGoToHost(hull))
             {
-                if (!CustomLoadouts.SendEditToHost(hull, 2, null, true)) Toast("Your change could not be sent to the host. Try again in a moment.");
+                if (!CustomLoadouts.SendEditToHost(hull, ship, null, true)) Toast("Your change could not be sent to the host. Try again in a moment.");
             }
             else
             {
-                LoadoutStore.ForgetShip2(hull);
-                CustomLoadouts.OnEdited(hull);
+                LoadoutStore.Forget(hull, ship);
+                CustomLoadouts.OnEdited(hull, 0, 0, ship);
             }
             Redisplay();
             if (_storage != null && _storage.IsOpen) _storage.Refresh();

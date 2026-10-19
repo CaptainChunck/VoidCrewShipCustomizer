@@ -149,6 +149,14 @@ namespace VoidCrewShipCustomizer
                         TerminalUi.OnSelectRefused();
                         return false;
                     }
+                    // Void Crew Fleet 0.4.0: the host may make ship 1 a given type.
+                    string wrongType = CustomLoadouts.WrongType(1, hull);
+                    if (wrongType != null)
+                    {
+                        TerminalUi.Toast(wrongType);
+                        TerminalUi.OnSelectRefused();
+                        return false;
+                    }
                     if (!PhotonNetwork.IsMasterClient)
                     {
                         // The game sends this choice to the host, whose Ship Customizer checks it again and selects the
@@ -319,6 +327,9 @@ namespace VoidCrewShipCustomizer
                 // Challenge quests and saved runs restrict the list (IgnoreRankRequirements); CUSTOM is not offered then.
                 if (!CustomLoadouts.Available || loadouts == null || loadouts.Count == 0 || __instance.IgnoreRankRequirements) return;
                 if (loadouts.Exists(CustomLoadouts.IsCustom)) return;
+                // Void Crew Fleet 0.4.0: when the host makes the ship being set up a given type, only that type's CUSTOM.
+                GUIDUnion forced = FleetLink.HullOfShip(CustomLoadouts.TerminalShip);
+                if (!forced.IsNull && forced != loadouts[0].ShipGuid) return;
                 ShipLoadoutDataDef custom;
                 if (CustomLoadouts.TryGetDef(loadouts[0].ShipGuid, out custom)) loadouts.Add(custom);
             }

@@ -330,11 +330,10 @@ namespace VoidCrewShipCustomizer
             return copy;
         }
 
-        /// <summary>"Match rules: the RED team's CUSTOM ship starts without Placeholder, 2x Astral Gravity Well; with ..."</summary>
+        /// <summary>"Match rules: RED 1's CUSTOM loadout starts without Placeholder, 2x Astral Gravity Well; with ..."</summary>
         private static string Summary(int ship, List<Issue> removed)
         {
-            string team = FleetLink.TeamNameOfShip(ship);
-            string whose = team != null ? "the " + team + " team's CUSTOM ship" : (ship == 2 ? "ship 2's CUSTOM loadout" : "the CUSTOM ship");
+            string whose = FleetLink.IsTeamMatch || ship >= 2 ? FleetLink.ShipName(ship) + "'s CUSTOM loadout" : "the CUSTOM ship";
             var parts = new List<string>();
             List<string> things = removed.Where(i => i.Option != null).GroupBy(i => i.Name)
                 .Select(g => (g.Count() > 1 ? g.Count() + "x " : "") + g.Key).ToList();

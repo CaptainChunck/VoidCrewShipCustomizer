@@ -50,14 +50,20 @@ Ship Customizer follows Void Crew's official modding guidelines for sandbox mods
 
 ## Works with Void Crew Fleet
 
-With Void Crew Fleet installed, its second ship can use CUSTOM too. Under SHIP 2 the terminal shows ship 2's CUSTOM
-loadout: the same as ship 1's until you change it there. LOAD LOADOUT has SAME AS SHIP 1 to go back. Choose CUSTOM with
-SELECT under SHIP 2 for ship 2 to use it; left AS SHIP 1, ship 2 starts as a copy of ship 1. Ship 2's fabricator gets its
-own level and, with Void Crew Fleet 0.2.1 or newer, its own starting alloys (with an older Fleet, both ships start with
-ship 1's). Any player can set ship 2 up, and the same rules apply to both ships.
+With Void Crew Fleet installed, every player ship it adds can use CUSTOM too: up to 3 ships in co-op and up to 3 a team in
+a Fleet Battle with Void Crew Fleet 0.4.0 or newer (ship 2 with an older Fleet). Under each ship the terminal shows that
+ship's CUSTOM loadout, and SELECT there makes the ship use it. Each ship's fabricator gets its own level and, with Void
+Crew Fleet 0.2.1 or newer, its own starting alloys. Any player can set the ships up, and the same rules apply to every
+ship.
 
-In a **Fleet Battle** (PvP), ship 1 belongs to the BLUE team and ship 2 to the RED team: only a ship's own team can change
-its CUSTOM loadout, and the other team sees it view-only.
+- In co-op, a ship's CUSTOM loadout is the same as ship 1's until you change it there (LOAD LOADOUT has SAME AS SHIP 1 to
+  go back). LOAD LOADOUT can also copy another ship's CUSTOM once.
+- CUSTOM on ships 3 to 6 needs everyone in the room on Ship Customizer 0.9.0 or newer.
+- When the host makes a ship a given type, only that type's CUSTOM is offered for it.
+
+In a **Fleet Battle** (PvP), the odd ships (BLUE 1, 2, 3) belong to the BLUE team and the even ships (RED 1, 2, 3) to the
+RED team: only a ship's own team can change its CUSTOM loadout, and the other team sees it view-only. No ship follows or
+copies the other team's CUSTOM.
 
 **Match rules keep a Fleet Battle even:**
 
@@ -69,8 +75,8 @@ its CUSTOM loadout, and the other team sees it view-only.
   still breaks them comes off when the mission starts (your saved loadouts keep everything), and everyone is told in the
   chat.
 
-Without Void Crew Fleet (not installed, or turned off in its config), all of this stays off and Ship Customizer works on
-its own.
+Fleet's features only apply when the host runs Void Crew Fleet too. Without it (not installed, turned off in its config,
+or not running on the host), all of this stays off and out of sight, and Ship Customizer works on its own.
 
 ## Settings
 

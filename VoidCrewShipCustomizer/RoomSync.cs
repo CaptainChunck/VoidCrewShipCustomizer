@@ -22,11 +22,17 @@ namespace VoidCrewShipCustomizer
     /// </summary>
     internal static class RoomSync
     {
-        /// <summary>JSON of the host's chosen CUSTOM loadout, absent while a game loadout is chosen.</summary>
+        /// <summary>
+        /// JSON of the CUSTOM loadout ship 1 uses, absent while a game loadout is chosen. Ships 2 to 6 (Void Crew Fleet) have
+        /// their own: SC_Custom2 to SC_Custom6 (see <see cref="CustomKeyOf"/>).
+        /// </summary>
         public const string CustomKey = "SC_Custom";
 
-        /// <summary>JSON of the host's ship 2 CUSTOM loadout (Void Crew Fleet), absent otherwise.</summary>
-        public const string CustomKey2 = "SC_Custom2";
+        /// <summary>
+        /// 0.9.0 on: whether the host runs Void Crew Fleet. Players with Fleet only use its features (ships 2 to 6, team and
+        /// match rules) while the host runs it too.
+        /// </summary>
+        public const string FleetKey = "SC_Fleet";
 
         /// <summary>True while the current mission was started with a CUSTOM loadout.</summary>
         public const string RunKey = "SC_Run";
@@ -55,9 +61,10 @@ namespace VoidCrewShipCustomizer
         /// <summary>
         /// Raised when what players exchange changes. 1: 0.3.0 and 0.4.0. 2: 0.5.0, where every player with the mod can
         /// choose and change the host's CUSTOM loadouts. 3: 0.8.0, where a change carries the loadout it was made against
-        /// and the host merges it part by part (older players' whole-loadout changes still work).
+        /// and the host merges it part by part (older players' whole-loadout changes still work). 4: 0.9.0, with ships 3
+        /// to 6 (Void Crew Fleet 0.4.0) and the host's word on whether it runs Fleet.
         /// </summary>
-        public const int Protocol = 3;
+        public const int Protocol = 4;
 
         /// <summary>The oldest protocol that still pauses its player's progression in a CUSTOM run, so counts as having the mod.</summary>
         private const int OldestProtocol = 1;
@@ -66,8 +73,14 @@ namespace VoidCrewShipCustomizer
         private const int SharedProtocol = 2;
 
         /// <summary>
+        /// From this protocol on, a player knows ships 3 to 6: CUSTOM on those ships needs everyone in the room on it (an
+        /// older player could neither see nor change their loadouts).
+        /// </summary>
+        private const int ManyShipsProtocol = 4;
+
+        /// <summary>
         /// Room properties (protocol 2): the host's CUSTOM loadout for one ship type, as this prefix, the player ship (1, or
-        /// 2 for Void Crew Fleet), "_" and the ship type's GUID. Ship 2's is absent while it follows ship 1's.
+        /// 2 to 6 for Void Crew Fleet's), "_" and the ship type's GUID. Ships 2 to 6 have none while they follow ship 1's.
         /// </summary>
         private const string LayoutKeyStart = "SC_Layout";
 
@@ -120,11 +133,11 @@ namespace VoidCrewShipCustomizer
             public int N;
             /// <summary>The ship type's GUID.</summary>
             public string Hull;
-            /// <summary>1, or 2 for Void Crew Fleet's second ship.</summary>
+            /// <summary>The player ship: 1, or 2 to 6 for Void Crew Fleet's.</summary>
             public int Ship = 1;
             /// <summary>The whole changed loadout (empty when <see cref="FollowShip1"/>).</summary>
             public HullConfig Config;
-            /// <summary>Ship 2 goes back to following ship 1's loadout.</summary>
+            /// <summary>Ship 2 to 6 goes back to following ship 1's loadout.</summary>
             public bool FollowShip1;
             /// <summary>
             /// 0.8.0 on: the loadout as the player last saw it from the host, so the host makes only the player's own
@@ -148,12 +161,16 @@ namespace VoidCrewShipCustomizer
         private static string _lastNoticeJson;
         private static string _pendingNotice;
         private static string _room;
-        private static string _lastCustomJson;
-        private static string _lastCustomJson2;
+        /// <summary>Each player ship's CUSTOM choice as last read from the room (index 1 to CustomLoadouts.MaxShips).</summary>
+        private static readonly string[] LastCustomJson = new string[CustomLoadouts.MaxShips + 1];
+        /// <summary>Host: each player ship's CUSTOM choice as this host last sent it to the room.</summary>
+        private static readonly string[] PublishedCustom = new string[CustomLoadouts.MaxShips + 1];
         private static string _taggedRoom;
         private static float _taggedAt;
         private static bool _wasHost;
         private static int _hostActor = -1;
+        private static bool _fleetWasRunning;
+        private static float _fleetFlagSentAt = -100f;
 
         // The host: the room it shares its CUSTOM loadouts with, and the changes it has read, by player and property.
         private static string _sharedRoom;
@@ -165,24 +182,28 @@ namespace VoidCrewShipCustomizer
         private static readonly Dictionary<string, int> SentEdits = new Dictionary<string, int>();
         private static int _editNumber;
 
-        public static void PublishCustom(HullInfo hull, HullConfig config)
+        /// <summary>The room property with a player ship's CUSTOM choice: SC_Custom for ship 1, SC_Custom2 to SC_Custom6 for Fleet's.</summary>
+        public static string CustomKeyOf(int ship)
         {
-            Set(CustomKey, JsonConvert.SerializeObject(new RoomCustom { Ship = hull.ShipGuid.AsHex(), Config = config }, Formatting.None));
+            return ship <= 1 ? CustomKey : CustomKey + ship;
         }
 
-        public static void ClearCustom()
+        /// <summary>Host: a player ship now uses this CUSTOM loadout (not sent again when it is what this host last sent).</summary>
+        public static void PublishCustom(int ship, HullInfo hull, HullConfig config)
         {
-            Set(CustomKey, null);
+            if (!CustomLoadouts.ValidShip(ship) || !PhotonNetwork.IsMasterClient) return;
+            string json = JsonConvert.SerializeObject(new RoomCustom { Ship = hull.ShipGuid.AsHex(), Config = config }, Formatting.None);
+            if (PublishedCustom[ship] == json) return;
+            PublishedCustom[ship] = json;
+            Set(CustomKeyOf(ship), json);
         }
 
-        public static void PublishCustom2(HullInfo hull, HullConfig config)
+        /// <summary>Host: a player ship uses a game loadout (or none).</summary>
+        public static void ClearCustom(int ship)
         {
-            Set(CustomKey2, JsonConvert.SerializeObject(new RoomCustom { Ship = hull.ShipGuid.AsHex(), Config = config }, Formatting.None));
-        }
-
-        public static void ClearCustom2()
-        {
-            Set(CustomKey2, null);
+            if (!CustomLoadouts.ValidShip(ship)) return;
+            PublishedCustom[ship] = null;
+            Set(CustomKeyOf(ship), null);
         }
 
         /// <summary>Host: whether the mission is a CUSTOM run, and (once known) its session id.</summary>
@@ -285,19 +306,26 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>
-        /// Host: shares its CUSTOM loadouts of one ship type, ship 1's and ship 2's (absent while ship 2 follows ship 1).
-        /// <paramref name="by"/> and <paramref name="n"/> name the player's change this comes from (0 for the host's own).
+        /// Host: shares its CUSTOM loadouts of one ship type: only <paramref name="ship"/>'s when it names the one that
+        /// changed, otherwise every player ship's (ships 2 to 6 have none while they follow ship 1's). <paramref name="by"/>
+        /// and <paramref name="n"/> name the player's change this comes from (0 for the host's own).
         /// </summary>
         public static void PublishLayouts(HullInfo hull, int by, int n, int ship = 0, List<string> refused = null)
         {
             if (!SharingLayouts) return;
-            var properties = new Hashtable { { LayoutKey(1, hull.ShipGuid), LayoutJson(LoadoutStore.Get(hull), by, n, ship == 1 ? refused : null) } };
-            // Ship 2 only exists with Void Crew Fleet running.
-            if (FleetLink.Running)
+            var properties = new Hashtable();
+            for (int s = 1; s <= CustomLoadouts.MaxShips; s++)
             {
-                properties[LayoutKey(2, hull.ShipGuid)] = LoadoutStore.HasOwnShip2(hull) ? LayoutJson(LoadoutStore.Get(hull, 2), by, n, ship == 2 ? refused : null) : null;
+                if (ship > 0 && s != ship) continue;
+                // Ships 2 to 6 only exist with Void Crew Fleet running.
+                if (s >= 2 && !FleetLink.Running) break;
+                HullConfig layout = s == 1 || LoadoutStore.HasOwn(hull, s) ? LoadoutStore.Get(hull, s) : null;
+                List<string> refusedHere = s == ship && refused != null && refused.Count > 0 ? refused : null;
+                // A ship that follows ship 1 has no layout to share, but a refused change must still reach its player: then
+                // the layout is shared empty, with the refusal (the player's terminal goes back to following ship 1).
+                properties[LayoutKey(s, hull.ShipGuid)] = layout != null || refusedHere != null ? LayoutJson(layout, by, n, refusedHere) : null;
             }
-            Set(properties);
+            if (properties.Count > 0) Set(properties);
         }
 
         private static string LayoutJson(HullConfig config, int by, int n, List<string> refused)
@@ -358,7 +386,7 @@ namespace VoidCrewShipCustomizer
                         int applied;
                         if (edit == null || edit.Room != room || edit.To != me.ActorNumber) continue;
                         if (AppliedEdits.TryGetValue(seenKey, out applied) && edit.N <= applied) continue;
-                        // Void Crew Fleet battle: only a ship's own team may change it (ship 1 BLUE, ship 2 RED).
+                        // Void Crew Fleet battle: only a ship's own team may change it (odd ships BLUE, even ships RED).
                         if (!FleetLink.CanEditShip(player.ActorNumber, edit.Ship))
                         {
                             Log.Info("Ignored " + NameOf(player) + "'s change to ship " + edit.Ship + "'s CUSTOM loadout: it belongs to the other team.");
@@ -471,8 +499,8 @@ namespace VoidCrewShipCustomizer
                 var key = rawKey as string;
                 int ship;
                 GUIDUnion hullGuid;
-                // Ship 2's are only for Void Crew Fleet; without it running they are ignored.
-                if (!TryParseLayoutKey(key, out ship, out hullGuid) || (ship == 2 && !fleet)) continue;
+                // Ships 2 to 6 are only for Void Crew Fleet; without it running (here and on the host) they are ignored.
+                if (!TryParseLayoutKey(key, out ship, out hullGuid) || (ship >= 2 && !fleet)) continue;
                 present.Add(key);
                 var json = properties[rawKey] as string;
                 string seen;
@@ -490,7 +518,8 @@ namespace VoidCrewShipCustomizer
                     changed = true;
                     if (layout == null) continue;
                     if (mine && layout.Refused != null && layout.Refused.Count > 0) TerminalUi.Toast(RefusedMessage(layout.Refused));
-                    else if (!mine) CustomLoadouts.OnChangedByOther(NameOfActor(layout.By), ship, hullGuid);
+                    // (An empty layout only carries a refusal for its player: nothing changed.)
+                    else if (!mine && layout.Config != null) CustomLoadouts.OnChangedByOther(NameOfActor(layout.By), ship, hullGuid);
                 }
                 catch (Exception e)
                 {
@@ -515,7 +544,7 @@ namespace VoidCrewShipCustomizer
             hullGuid = GUIDUnion.Empty();
             if (key == null || key.Length < LayoutKeyStart.Length + 3 || !key.StartsWith(LayoutKeyStart, StringComparison.Ordinal)) return false;
             ship = key[LayoutKeyStart.Length] - '0';
-            if ((ship != 1 && ship != 2) || key[LayoutKeyStart.Length + 1] != '_') return false;
+            if (ship < 1 || ship > CustomLoadouts.MaxShips || key[LayoutKeyStart.Length + 1] != '_') return false;
             try
             {
                 hullGuid = new GUIDUnion(key.Substring(LayoutKeyStart.Length + 2));
@@ -542,17 +571,50 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         public static List<string> PlayersWithoutMod(bool giveJoinersTime)
         {
+            return PlayersOlderThan(OldestProtocol, giveJoinersTime);
+        }
+
+        /// <summary>
+        /// The other players whose Ship Customizer doesn't know ships 3 to 6 (older than 0.9.0, or none): CUSTOM on those
+        /// ships needs everyone to know them.
+        /// </summary>
+        public static List<string> PlayersWithoutManyShips(bool giveJoinersTime)
+        {
+            return PlayersOlderThan(ManyShipsProtocol, giveJoinersTime);
+        }
+
+        private static List<string> PlayersOlderThan(int protocol, bool giveJoinersTime)
+        {
             var missing = new List<string>();
             if (!PhotonNetwork.InRoom) return missing;
             foreach (Photon.Realtime.Player player in PhotonNetwork.PlayerList)
             {
                 if (player == null || player.IsLocal) continue;
-                if (ProtocolOf(player) >= OldestProtocol) continue;
+                if (ProtocolOf(player) >= protocol) continue;
                 float seen;
                 if (giveJoinersTime && FirstSeen.TryGetValue(player.ActorNumber, out seen) && Time.unscaledTime - seen < JoinGraceSeconds) continue;
                 missing.Add(NameOf(player));
             }
             return missing;
+        }
+
+        /// <summary>A player other than the host: whether the host's Ship Customizer knows ships 3 to 6 (0.9.0 on).</summary>
+        public static bool HostKnowsManyShips()
+        {
+            return PhotonNetwork.InRoom && (PhotonNetwork.IsMasterClient || ProtocolOf(PhotonNetwork.MasterClient) >= ManyShipsProtocol);
+        }
+
+        /// <summary>
+        /// Whether the room's host runs Void Crew Fleet, so Fleet's features may be used here: always true for the host itself
+        /// and outside a room. A host on Ship Customizer 0.9.0 or newer says so in the room (false until it has); an older
+        /// host (or one without Ship Customizer) can't, and then Fleet's own checks decide, as before.
+        /// </summary>
+        public static bool HostRunsFleet()
+        {
+            if (!PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient) return true;
+            if (ProtocolOf(PhotonNetwork.MasterClient) < ManyShipsProtocol) return true;
+            object value;
+            return TryGet(FleetKey, out value) && value is bool && (bool)value;
         }
 
         /// <summary>Whether the player with this actor number has the mod (this player always does).</summary>
@@ -667,8 +729,8 @@ namespace VoidCrewShipCustomizer
             {
                 ClearOwnEdits();
                 _room = room;
-                _lastCustomJson = null;
-                _lastCustomJson2 = null;
+                Array.Clear(LastCustomJson, 0, LastCustomJson.Length);
+                Array.Clear(PublishedCustom, 0, PublishedCustom.Length);
                 _lastNoticeJson = null;
                 _pendingNotice = null;
                 FirstSeen.Clear();
@@ -696,10 +758,20 @@ namespace VoidCrewShipCustomizer
                 _wasHost = host;
                 _hostActor = hostActor;
                 ForgetShared();
-                _lastCustomJson = null;
-                _lastCustomJson2 = null;
+                Array.Clear(LastCustomJson, 0, LastCustomJson.Length);
+                Array.Clear(PublishedCustom, 0, PublishedCustom.Length);
+                _fleetFlagSentAt = -100f;
                 CustomLoadouts.ForgetHostLayouts();
                 TerminalUi.OnLoadoutChangedRemotely();
+            }
+
+            if (host) PublishFleetFlag();
+            // Void Crew Fleet's features come and go with the host (a new host, or its word arriving): show what applies now.
+            bool fleet = FleetLink.Running;
+            if (fleet != _fleetWasRunning)
+            {
+                _fleetWasRunning = fleet;
+                CustomLoadouts.OnFleetRunningChanged(fleet);
             }
 
             if (host)
@@ -713,23 +785,30 @@ namespace VoidCrewShipCustomizer
             // A host without the mod (or older than 0.5.0) shares nothing: what an earlier host left in the room is stale.
             bool hostHasMod = ProtocolOf(PhotonNetwork.MasterClient) >= OldestProtocol;
             if (HostSharesLayouts()) ReadHostLayouts();
+            for (int ship = 1; ship <= CustomLoadouts.MaxShips; ship++)
+            {
+                // Ships 2 to 6 (Void Crew Fleet): only while Fleet runs here and on the host; otherwise they read as none.
+                object value;
+                TryGet(CustomKeyOf(ship), out value);
+                string json = hostHasMod && (ship == 1 || fleet) ? value as string : null;
+                if (json == LastCustomJson[ship]) continue;
+                LastCustomJson[ship] = json;
+                ApplyHostCustom(json, ship);
+            }
+        }
+
+        /// <summary>
+        /// Host: tells the room whether it runs Void Crew Fleet (players with Fleet only use it while it does), again after a
+        /// few seconds if it didn't stick (the room only shows a change once the server has it).
+        /// </summary>
+        private static void PublishFleetFlag()
+        {
+            bool fleet = FleetLink.RunningHere;
             object value;
-            TryGet(CustomKey, out value);
-            string json = hostHasMod ? value as string : null;
-            if (json != _lastCustomJson)
-            {
-                _lastCustomJson = json;
-                ApplyHostCustom(json, 1);
-            }
-            // Ship 2's choice (Void Crew Fleet): read only while Fleet runs here too.
-            if (!FleetLink.Running) return;
-            TryGet(CustomKey2, out value);
-            json = hostHasMod ? value as string : null;
-            if (json != _lastCustomJson2)
-            {
-                _lastCustomJson2 = json;
-                ApplyHostCustom(json, 2);
-            }
+            if (TryGet(FleetKey, out value) && value is bool && (bool)value == fleet) return;
+            if (Time.unscaledTime - _fleetFlagSentAt < 5f) return;
+            _fleetFlagSentAt = Time.unscaledTime;
+            Set(FleetKey, fleet);
         }
 
         /// <summary>
@@ -738,9 +817,21 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         private static void EnforceEveryoneHasMod()
         {
-            if (!CustomLoadouts.IsActive && CustomLoadouts.ActiveShip2.IsNull && !SavedCustomRunSelected()) return;
+            List<int> otherShips = Enumerable.Range(2, CustomLoadouts.MaxShips - 1).Where(s => !CustomLoadouts.ActiveShipOf(s).IsNull).ToList();
+            if (!CustomLoadouts.IsActive && otherShips.Count == 0 && !SavedCustomRunSelected()) return;
             List<string> missing = PlayersWithoutMod(true);
-            if (missing.Count == 0) return;
+            if (missing.Count == 0)
+            {
+                // Ships 3 to 6 also need everyone on 0.9.0 or newer (older players can't see their CUSTOM loadouts).
+                List<int> manyShips = otherShips.Where(s => s >= 3).ToList();
+                if (manyShips.Count == 0) return;
+                List<string> older = PlayersWithoutManyShips(true);
+                if (older.Count == 0) return;
+                CancelShips(manyShips);
+                PublishNotice("CUSTOM was switched off on " + ShipNames(manyShips) + ": " + string.Join(", ", older.ToArray()) +
+                              " joined with a Ship Customizer older than 0.9.0, and ships 3 to 6 need it.", true);
+                return;
+            }
             string who = string.Join(", ", missing.ToArray());
 
             if (CustomLoadouts.IsActive)
@@ -756,17 +847,32 @@ namespace VoidCrewShipCustomizer
                 }
                 PublishNotice("CUSTOM was switched off: " + who + " joined without Ship Customizer. Everyone needs it for CUSTOM.", true);
             }
-            if (!CustomLoadouts.ActiveShip2.IsNull)
+            if (otherShips.Count > 0)
             {
-                CustomLoadouts.DeactivateShip2AsHost();
-                ShipCustomizerApi.RaiseShip2CustomCancelled();
-                PublishNotice("Ship 2's CUSTOM was switched off: " + who + " joined without Ship Customizer.", true);
+                CancelShips(otherShips);
+                PublishNotice("CUSTOM was switched off on " + ShipNames(otherShips) + ": " + who + " joined without Ship Customizer.", true);
             }
             if (SavedCustomRunSelected() && HubQuestManager.Instance != null)
             {
                 HubQuestManager.Instance.SelectQuest(GUIDUnion.Empty());
                 PublishNotice("The saved CUSTOM run was unselected: " + who + " joined without Ship Customizer.", true);
             }
+        }
+
+        /// <summary>Host: Void Crew Fleet's ships lose their CUSTOM loadout (Fleet gives them CUSTOM's stand-in).</summary>
+        private static void CancelShips(IEnumerable<int> ships)
+        {
+            foreach (int ship in ships)
+            {
+                CustomLoadouts.DeactivateShipAsHost(ship);
+                ShipCustomizerApi.RaiseShipCustomCancelled(ship);
+            }
+        }
+
+        /// <summary>"SHIP 2, SHIP 3" or "BLUE 2, RED 2".</summary>
+        private static string ShipNames(IEnumerable<int> ships)
+        {
+            return string.Join(", ", ships.Select(FleetLink.ShipName).ToArray());
         }
 
         /// <summary>Whether the room is set to continue a saved run that was started with a CUSTOM loadout.</summary>
@@ -786,16 +892,7 @@ namespace VoidCrewShipCustomizer
 
         private static void ApplyHostCustom(string json, int ship)
         {
-            if (ship == 2)
-            {
-                CustomLoadouts.ActiveShip2 = GUIDUnion.Empty();
-                CustomLoadouts.RemoteConfig2 = null;
-            }
-            else
-            {
-                CustomLoadouts.ActiveShip = GUIDUnion.Empty();
-                CustomLoadouts.RemoteConfig = null;
-            }
+            CustomLoadouts.SetRemoteChoice(ship, GUIDUnion.Empty(), null);
             if (!string.IsNullOrEmpty(json))
             {
                 try
@@ -804,20 +901,12 @@ namespace VoidCrewShipCustomizer
                     var hullGuid = new GUIDUnion(custom.Ship);
                     HullInfo hull;
                     ShipLoadoutDataDef def;
-                    if (Catalog.TryGetHull(hullGuid, out hull) && CustomLoadouts.TryGetDef(hullGuid, out def))
+                    // Only the game's ships: a made-up GUID must not make the catalog try to read a ship that isn't there.
+                    if (Catalog.ShipGuids().Contains(hullGuid) && Catalog.TryGetHull(hullGuid, out hull) && CustomLoadouts.TryGetDef(hullGuid, out def))
                     {
                         HullConfig config = custom.Config ?? new HullConfig();
-                        if (ship == 2)
-                        {
-                            CustomLoadouts.ActiveShip2 = hullGuid;
-                            CustomLoadouts.RemoteConfig2 = config;
-                        }
-                        else
-                        {
-                            CustomLoadouts.ActiveShip = hullGuid;
-                            CustomLoadouts.RemoteConfig = config;
-                        }
-                        Log.Info("The host chose a CUSTOM " + hull.Name + (ship == 2 ? " for ship 2" : "") + ": " + CustomLoadouts.Describe(config) + ".");
+                        CustomLoadouts.SetRemoteChoice(ship, hullGuid, config);
+                        Log.Info("The host chose a CUSTOM " + hull.Name + (ship >= 2 ? " for " + FleetLink.ShipName(ship) : "") + ": " + CustomLoadouts.Describe(config) + ".");
                     }
                 }
                 catch (Exception e)
