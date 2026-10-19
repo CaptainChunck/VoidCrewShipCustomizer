@@ -16,7 +16,7 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
    - **HARDPOINTS** lists every hardpoint as a big row (port or starboard, bow to aft), handy in VR.
    - **STORAGE** opens every storage rack: click a slot to put any item there (ammo, power cells, repair plates,
      materials, animus crates, weapon crates, mods or relics).
-   - **HOMUNCULUS** picks the standard homunculus or any Blessed Homunculus.
+   - **HOMUNCULUS** picks the standard homunculus or any Blessed Homunculus, each with what its blessing does.
    - **FABRICATOR** sets how many alloys the run starts with, and the fabricator's level (MK I to MK III).
    - **SAVE LOADOUT** keeps the loadout on your PC (10 slots per ship) to bring back in any later match.
    - **LOAD LOADOUT** brings back a saved loadout, starts from any of the game's loadouts (challenge ones included), or
@@ -50,6 +50,16 @@ ship 1's). Any player can set ship 2 up, and the same rules apply to both ships.
 
 In a **Fleet Battle** (PvP), ship 1 belongs to the BLUE team and ship 2 to the RED team: only a ship's own team can change
 its CUSTOM loadout, and the other team sees it view-only.
+
+**Match rules keep a Fleet Battle even:**
+
+- A CUSTOM ship never starts with relics, the Armory Exchange Key, extra Fabricator modules or the game's unfinished
+  Placeholder weapons; the menus leave them out. Relics found during the match are yours to use.
+- With Void Crew Fleet 0.3.0 or newer, the host sets the rest on Fleet's lobby screen (SHIP RULES): tiers, categories,
+  single items, the fabricator's highest level and the most starting alloys. The menus grey out what the rules refuse.
+- **MATCH RULES**, above the CUSTOM section, shows the rules and what breaks them, and can take it off. Anything that
+  still breaks them comes off when the mission starts (your saved loadouts keep everything), and everyone is told in the
+  chat.
 
 Without Void Crew Fleet (not installed, or turned off in its config), all of this stays off and Ship Customizer works on
 its own.

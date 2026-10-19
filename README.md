@@ -29,7 +29,8 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
   - **STORAGE**: every storage rack and slot. Any item fits any slot: ammo, power cells, repair plates, materials, animus
     crates, weapon crates (an inscribed crate that builds that weapon on any free hardpoint), weapon mods or relics.
     During a CUSTOM run the racks take any item too.
-  - **HOMUNCULUS**: the standard homunculus, or any Blessed Homunculus from the game's loadouts.
+  - **HOMUNCULUS**: the standard homunculus, or any Blessed Homunculus from the game's loadouts. Each one shows what its
+    blessing does (the text of the game's tooltip), so there's no need to hover over each one.
   - **FABRICATOR**: how many alloys the run starts with (the game's own amount, or 0 to 10,000), and the fabricator's
     level, MK I to MK III.
   - **SAVE LOADOUT**: keep this CUSTOM loadout on your PC, in one of 10 slots per ship, to bring back in any later
@@ -45,6 +46,15 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
   start with the alloys of ship 1's CUSTOM loadout.
   - In a **Fleet Battle** (PvP), ship 1 belongs to the BLUE team and ship 2 to the RED team: only a ship's own team can
     change its CUSTOM loadout, and the other team sees it view-only. The CUSTOM pop-ups take the team's colour.
+  - **Match rules keep a Fleet Battle even.** A CUSTOM ship never starts with relics, the Armory Exchange Key, extra
+    Fabricator modules or the game's unfinished Placeholder weapons; the menus leave them out (no RELICS tab). Relics
+    found during the match are yours to use.
+  - With Void Crew Fleet 0.3.0 or newer, the host sets the rest on Fleet's lobby screen (SHIP RULES): which tiers,
+    categories and single items CUSTOM may use, the fabricator's highest level and the most starting alloys. The menus
+    grey out what the rules refuse (NOT ALLOWED IN THIS MATCH).
+  - A **MATCH RULES** button above the CUSTOM section shows the rules and what the loadout has that breaks them
+    (BREAKS MATCH RULES), and can take it off. When the mission starts, the host takes off whatever still breaks them
+    (your saved loadouts keep everything) and everyone with Ship Customizer is told in the chat.
   - Without Fleet (not installed, or turned off in its config), all of this stays off and Ship Customizer works on its
     own.
 - Your CUSTOM loadouts are saved per ship in
@@ -146,6 +156,12 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
   looked up once the hub has loaded. Its `VoidCrewFleet.FleetApi` (`IsTeamMatch`, `TeamOfShip`, `CanEditShip`,
   `ShipColor`, `TeamsChanged`) gives the Fleet Battle team rules. The terminal follows them, and the host ignores changes
   from the wrong team. Without Fleet, ship 2 and the team rules are off.
+- Fleet Battle match rules (0.7.0, `MatchRules`): what a Fleet Battle never allows is fixed here (relics, the Armory
+  Exchange Key, the Fabricator modules, Placeholder weapons, crates and mods). The host's rules come from Fleet 0.3.0's
+  `ShipRulesActive`, `IsTierAllowed`, `IsCategoryAllowed`, `IsItemAllowed`, `FabricatorMaxLevel`, `MaxStartAlloys` and
+  `ShipRulesChanged`, and Fleet's SHIP RULES tab lists what `GetRuleOptions` returns. At mission start the host applies
+  them to a copy of each CUSTOM loadout and sets the room property `SC_Notice` (`{N, T, Text}`), which every player with
+  the mod shows in the chat once the mission has loaded.
 - When the mission starts (`GSIngame.TransitionTo`), the host swaps the session's `ToLoadShipData` for a `ShipLoadout`
   built from the CUSTOM choices, and the game's own `ShipLoadout.InitializeShip` spawns it for everyone. Anything the game
   could not spawn is left out with a warning instead of stopping the mission from starting.
@@ -168,7 +184,8 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
 | `string CheckShip2(GUIDUnion, int actorNumber)` | Host: null if that player may give ship 2 this CUSTOM loadout now (any player with the mod from 0.5.0; only the host before), otherwise the reason. |
 | `void SetShip2(GUIDUnion)` | Host: ship 2 now uses this loadout (CUSTOM or not); other players with the mod see its layout. |
 | `ShipLoadout BuildShip2(GUIDUnion)` | Host, from a `GSIngame.TransitionTo` prefix that runs after this plugin's: ship 2's CUSTOM `ShipLoadout`, or null (use the stand-in). Makes the run a CUSTOM run. |
-| `int GetShip2Alloys(GUIDUnion)` | Host, at mission start: the alloys ship 2's CUSTOM loadout starts with, or -1 for the game's own amount (0.5.1). |
+| `int GetShip2Alloys(GUIDUnion)` | Host, at mission start: the alloys ship 2's CUSTOM loadout starts with, or -1 for the game's own amount (0.5.1). In a Fleet Battle, within the match rules (0.7.0). |
+| `string[] GetRuleOptions()` | What a Fleet Battle's match rules can allow or refuse, one `code\|category\|tier\|name` line each; empty until the hub has loaded (0.7.0). |
 | `event Action Ship2CustomCancelled` | Host: ship 2's CUSTOM was switched off in the hub because someone without the mod joined. |
 
 ## License

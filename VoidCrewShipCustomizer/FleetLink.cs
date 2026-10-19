@@ -25,6 +25,8 @@ namespace VoidCrewShipCustomizer
         private static bool _running;
         private static bool _readsShip2Alloys;
         private static MethodInfo _isTeamMatch, _teamOfShip, _canEditShip, _shipColor;
+        // Fleet Battle's rules for CUSTOM ships (Void Crew Fleet 0.3.0 on); each one optional.
+        private static MethodInfo _rulesActive, _tierAllowed, _categoryAllowed, _itemAllowed, _fabricatorMaxLevel, _maxStartAlloys;
 
         /// <summary>
         /// Whether Void Crew Fleet gives ship 2 the starting alloys of its own CUSTOM loadout (it calls
@@ -99,6 +101,7 @@ namespace VoidCrewShipCustomizer
                 return;
             }
             _readsShip2Alloys = Flag(api, "ReadsShip2Alloys");
+            LinkRules(api);
             PropertyInfo isTeamMatch = api.GetProperty("IsTeamMatch", BindingFlags.Public | BindingFlags.Static);
             MethodInfo teamOfShip = api.GetMethod("TeamOfShip", new[] { typeof(int) });
             MethodInfo canEditShip = api.GetMethod("CanEditShip", new[] { typeof(int), typeof(int) });
@@ -117,6 +120,39 @@ namespace VoidCrewShipCustomizer
             EventInfo changed = api.GetEvent("TeamsChanged", BindingFlags.Public | BindingFlags.Static);
             if (changed != null) changed.AddEventHandler(null, (Action)OnTeamsChanged);
             Log.Info("Void Crew Fleet found: in a Fleet Battle, only a ship's own team can change its CUSTOM loadout.");
+        }
+
+        /// <summary>
+        /// Fleet Battle's rules for CUSTOM ships: which tiers, categories and items CUSTOM may use, the highest fabricator
+        /// level and the most starting alloys. All of them or none: a Fleet with only some leaves CUSTOM unrestricted.
+        /// </summary>
+        private static void LinkRules(Type api)
+        {
+            MethodInfo active = Getter(api, "ShipRulesActive", typeof(bool));
+            MethodInfo tier = api.GetMethod("IsTierAllowed", new[] { typeof(int) });
+            MethodInfo category = api.GetMethod("IsCategoryAllowed", new[] { typeof(string) });
+            MethodInfo item = api.GetMethod("IsItemAllowed", new[] { typeof(string) });
+            MethodInfo fabricator = Getter(api, "FabricatorMaxLevel", typeof(int));
+            MethodInfo alloys = Getter(api, "MaxStartAlloys", typeof(int));
+            if (active == null || tier == null || category == null || item == null || fabricator == null || alloys == null) return;
+            if (tier.ReturnType != typeof(bool) || category.ReturnType != typeof(bool) || item.ReturnType != typeof(bool)) return;
+            _tierAllowed = tier;
+            _categoryAllowed = category;
+            _itemAllowed = item;
+            _fabricatorMaxLevel = fabricator;
+            _maxStartAlloys = alloys;
+            _rulesActive = active;
+            EventInfo changed = api.GetEvent("ShipRulesChanged", BindingFlags.Public | BindingFlags.Static);
+            if (changed != null) changed.AddEventHandler(null, (Action)OnRulesChanged);
+            Log.Info("Void Crew Fleet's match rules are linked: in a Fleet Battle, CUSTOM ships keep to them.");
+        }
+
+        /// <summary>A static property's getter (or, failing that, nothing) of the given type.</summary>
+        private static MethodInfo Getter(Type api, string name, Type type)
+        {
+            PropertyInfo property = api.GetProperty(name, BindingFlags.Public | BindingFlags.Static);
+            MethodInfo getter = property != null ? property.GetGetMethod() : null;
+            return getter != null && getter.ReturnType == type ? getter : null;
         }
 
         /// <summary>An optional true/false of Fleet's API (a static property or field); false when it isn't there.</summary>
@@ -156,11 +192,26 @@ namespace VoidCrewShipCustomizer
         {
             try
             {
+                // A Fleet Battle starting or ending changes what CUSTOM ships may start with (the match rules).
+                CustomLoadouts.RefreshAll();
                 TerminalUi.OnLoadoutChangedRemotely();
             }
             catch (Exception e)
             {
                 Log.Failure("Redrawing the terminal after the teams changed", e);
+            }
+        }
+
+        private static void OnRulesChanged()
+        {
+            try
+            {
+                CustomLoadouts.RefreshAll();
+                TerminalUi.OnLoadoutChangedRemotely();
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Redrawing the terminal after the match rules changed", e);
             }
         }
 
@@ -197,6 +248,43 @@ namespace VoidCrewShipCustomizer
             if (_shipColor == null) return null;
             Color color = Call(_shipColor, Color.clear, ship);
             return color.a > 0f ? color : (Color?)null;
+        }
+
+        /// <summary>Whether a Fleet Battle has rules for CUSTOM ships that restrict something.</summary>
+        public static bool ShipRulesActive
+        {
+            get
+            {
+                Look();
+                return _rulesActive != null && Call(_rulesActive, false);
+            }
+        }
+
+        public static bool IsTierAllowed(int tier)
+        {
+            return _tierAllowed == null || Call(_tierAllowed, true, tier);
+        }
+
+        public static bool IsCategoryAllowed(string category)
+        {
+            return _categoryAllowed == null || Call(_categoryAllowed, true, category);
+        }
+
+        public static bool IsItemAllowed(string code)
+        {
+            return _itemAllowed == null || Call(_itemAllowed, true, code);
+        }
+
+        /// <summary>The highest fabricator level the rules allow (0 is MK I).</summary>
+        public static int FabricatorMaxLevel
+        {
+            get { return _fabricatorMaxLevel == null ? HullConfig.MaxFabricatorLevel : Call(_fabricatorMaxLevel, HullConfig.MaxFabricatorLevel); }
+        }
+
+        /// <summary>The most starting alloys the rules allow; -1 for the game's own amount only, int.MaxValue for no limit.</summary>
+        public static int MaxStartAlloys
+        {
+            get { return _maxStartAlloys == null ? int.MaxValue : Call(_maxStartAlloys, int.MaxValue); }
         }
 
         private static T Call<T>(MethodInfo method, T fallback, params object[] args)

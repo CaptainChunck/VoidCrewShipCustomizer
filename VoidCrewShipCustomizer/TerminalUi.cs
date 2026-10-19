@@ -303,10 +303,13 @@ namespace VoidCrewShipCustomizer
 
             foreach (Option option in Catalog.SlotOptions)
             {
+                // A Fleet Battle never offers some things (Placeholder weapons, extra fabricators): they aren't listed.
+                if (MatchRules.Hidden(option)) continue;
                 SocketInfo target = TargetFor(option, socket, hull.Sockets, config);
                 if (target == null) continue;
                 List<int> displaced = Hardpoints.Displaced(target, config.Slots.Keys);
                 bool isCurrent = target.Index == socket.Index && currentCode == option.Code;
+                bool refused = MatchRules.WhyRefused(option) != null;
 
                 var entry = new PickerPanel.Entry
                 {
@@ -322,8 +325,16 @@ namespace VoidCrewShipCustomizer
                 string blocker = SingleInstanceBlocker(option, config, displaced);
                 if (isCurrent)
                 {
-                    entry.Tag = "FITTED";
+                    entry.Tag = refused ? "FITTED · " + MatchRules.NotAllowedTag : "FITTED";
+                    if (refused) entry.TagColor = Ui.Warning;
                     entry.OnPick = () => { };
+                }
+                else if (refused)
+                {
+                    // The host's match rules refuse it: shown greyed out, so players see why it can't be picked.
+                    entry.Enabled = false;
+                    entry.Tag = MatchRules.NotAllowedTag;
+                    entry.TagColor = Ui.Warning;
                 }
                 else if (blocker != null)
                 {
@@ -348,9 +359,17 @@ namespace VoidCrewShipCustomizer
 
             string title = SizeTitle(socket.Size);
             string subtitle = current != null ? "Fitted: " + current.Name + ". Pick a replacement, or empty it." : "Empty. Pick what to fit here.";
+            subtitle += BreaksRulesNote(current);
             if (socket.Overlaps.Any(i => hull.Sockets[i].Size < socket.Size)) subtitle += " A smaller module takes one part of this hardpoint.";
             if (Settings.AllowAnySize.Value) subtitle += " (Any size allowed: see the AllowAnySize setting.)";
             OpenPicker(title, subtitle, entries, current != null ? current.Category : null);
+        }
+
+        /// <summary>For a picker's subtitle: why the current choice breaks this match's rules, or "".</summary>
+        private static string BreaksRulesNote(Option current)
+        {
+            string why = current != null ? MatchRules.WhyRefused(current) : null;
+            return why == null ? "" : " Not allowed in this match (" + why.TrimEnd('.') + "), so it comes off when the mission starts.";
         }
 
         /// <summary>Which position a module would go in when picked from this hardpoint, or null if it doesn't fit.</summary>
@@ -428,7 +447,6 @@ namespace VoidCrewShipCustomizer
                 _toolbar = new VisualElement { name = "ShipCustomizerToolbar" };
                 _toolbar.style.position = Position.Absolute;
                 _toolbar.style.right = ToolbarRight;
-                _toolbar.style.top = ToolbarTop;
                 _toolbar.style.width = ToolbarWidth;
                 _toolbar.style.flexDirection = FlexDirection.Row;
                 _toolbar.style.flexWrap = Wrap.Wrap;
@@ -439,6 +457,16 @@ namespace VoidCrewShipCustomizer
             HullInfo hull = _shownHull;
             HullConfig config = CustomLoadouts.ConfigToShow(hull);
             bool editable = CustomLoadouts.CanEdit(hull);
+            // In a Fleet Battle the MATCH RULES button goes above the section, so its header stays level with the terminal's.
+            bool match = MatchRules.InMatch;
+            _toolbar.style.top = ToolbarTop - (match ? ToolbarButtonHeight + 5f : 0f);
+            if (match)
+            {
+                int broken = MatchRules.Check(hull, config, false).Count;
+                Button rules = AddToolbarButton(broken > 0 ? "BREAKS MATCH RULES (" + broken + ")" : "MATCH RULES", () => OpenRulesPicker(hull));
+                rules.style.width = ToolbarWidth;
+                if (broken > 0) rules.style.color = Ui.Warning;
+            }
             var notes = new List<string>();
             string team = FleetLink.TeamNameOfShip(CustomLoadouts.TerminalShip);
             if (team != null) notes.Add(team + " TEAM'S SHIP");
@@ -511,7 +539,7 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>The game's small button (the small version of SELECT), sized to fit two to a row.</summary>
-        private static void AddToolbarButton(string text, Action onClick)
+        private static Button AddToolbarButton(string text, Action onClick)
         {
             Button button = Ui.GameButton(text, onClick, "metem-button-size__small");
             button.style.width = (ToolbarWidth - 6f) / 2f;
@@ -526,6 +554,53 @@ namespace VoidCrewShipCustomizer
             button.style.fontSize = 17;
             button.style.whiteSpace = WhiteSpace.NoWrap;
             _toolbar.Add(button);
+            return button;
+        }
+
+        /// <summary>
+        /// In a Fleet Battle: what the shown CUSTOM loadout has that this match doesn't allow (the host takes it off when
+        /// the mission starts; a player who may change the loadout can take it off now), and the match's rules.
+        /// </summary>
+        private static void OpenRulesPicker(HullInfo hull)
+        {
+            HullConfig config = CustomLoadouts.ConfigToShow(hull);
+            List<MatchRules.Issue> issues = MatchRules.Check(hull, config, false);
+            bool editable = CustomLoadouts.CanEdit(hull);
+            var entries = new List<PickerPanel.Entry>();
+            if (issues.Count > 0 && editable)
+            {
+                entries.Add(new PickerPanel.Entry
+                {
+                    Pinned = true,
+                    Name = "TAKE OFF WHAT BREAKS THE RULES",
+                    Detail = "Now, instead of when the mission starts. Your saved loadouts keep everything.",
+                    Tag = issues.Count + (issues.Count == 1 ? " THING" : " THINGS"),
+                    TagColor = Ui.Warning,
+                    OnPick = () => Edit(hull, c => MatchRules.Check(hull, c, true))
+                });
+            }
+            foreach (MatchRules.Issue issue in issues)
+            {
+                entries.Add(new PickerPanel.Entry
+                {
+                    Name = issue.Name,
+                    Detail = issue.Where + "  ·  " + issue.Why,
+                    Icon = issue.Option != null ? issue.Option.Icon : null,
+                    Accent = Ui.Warning,
+                    Category = "BREAKS THE RULES",
+                    Tag = "COMES OFF",
+                    TagColor = Ui.Warning,
+                    Info = true
+                });
+            }
+            foreach (KeyValuePair<string, string> rule in MatchRules.Describe())
+            {
+                entries.Add(new PickerPanel.Entry { Name = rule.Key, Detail = rule.Value, DetailBright = true, Category = "THE RULES", Info = true });
+            }
+            string subtitle = issues.Count == 0
+                ? "This CUSTOM loadout keeps to the rules of this Fleet Battle."
+                : "When the mission starts, the host takes off what breaks this Fleet Battle's rules" + (editable ? ". You can also take it off now." : ".");
+            OpenPicker("MATCH RULES", subtitle, entries, issues.Count > 0 ? "BREAKS THE RULES" : "THE RULES");
         }
 
         /// <summary>
@@ -548,6 +623,7 @@ namespace VoidCrewShipCustomizer
                 string code;
                 if (config.Slots.TryGetValue(socket.Index, out code)) Catalog.TryGetOption(code, out option);
                 string rarity = option != null ? Ui.RarityName(option.Rarity) : "";
+                bool refused = option != null && MatchRules.WhyRefused(option) != null;
                 SocketInfo chosen = socket;
                 entries.Add(new PickerPanel.Entry
                 {
@@ -555,7 +631,8 @@ namespace VoidCrewShipCustomizer
                     Detail = PositionName(hull, socket) + "  ·  " + Catalog.SizeName(socket.Size) + (rarity.Length > 0 ? "  ·  " + rarity : ""),
                     Icon = option != null ? option.Icon : null,
                     Accent = option != null ? Ui.RarityColor(option.Rarity) : Ui.TextDim,
-                    Tag = option == null ? "+ FIT" : (editable ? "CHANGE" : ""),
+                    Tag = option == null ? "+ FIT" : (refused ? "NOT ALLOWED" : (editable ? "CHANGE" : "")),
+                    TagColor = refused ? Ui.Warning : Ui.Gold,
                     Tooltip = option != null ? option.Context : null,
                     TooltipGuid = option != null ? option.Guid : GUIDUnion.Empty(),
                     OnPick = () => OnSlotClicked(chosen.Index)
@@ -599,20 +676,34 @@ namespace VoidCrewShipCustomizer
             {
                 bool chosen = config.Homunculus == option.Code;
                 string code = option.Code;
-                entries.Add(new PickerPanel.Entry
+                bool refused = MatchRules.WhyRefused(option) != null;
+                // What its blessing does, as the game's tooltip says it, so there is no need to hover over each one.
+                string blessing = Catalog.BlessingOf(option);
+                var entry = new PickerPanel.Entry
                 {
                     Name = option.Name,
-                    Detail = "From the game's loadouts; each blessing suits the loadout it came with.",
+                    Detail = blessing ?? "From the game's loadouts; each blessing suits the loadout it came with.",
+                    DetailBright = blessing != null,
                     Icon = option.Icon,
                     Accent = Ui.RarityColor(option.Rarity),
                     Current = chosen,
-                    Tag = chosen ? "CHOSEN" : "",
+                    Tag = chosen ? (refused ? "CHOSEN · " + MatchRules.NotAllowedTag : "CHOSEN") : "",
+                    TagColor = refused ? Ui.Warning : Ui.Gold,
                     Tooltip = option.Context,
                     TooltipGuid = option.Guid,
                     OnPick = () => Edit(hull, c => c.Homunculus = code)
-                });
+                };
+                if (refused && !chosen)
+                {
+                    entry.Enabled = false;
+                    entry.Tag = MatchRules.NotAllowedTag;
+                }
+                entries.Add(entry);
             }
-            OpenPicker("HOMUNCULUS", "The homunculus your ship starts with in the Central Computer Cradle.", entries, null);
+            Option current;
+            string subtitle = "The homunculus your ship starts with in the Central Computer Cradle, with what each blessing does.";
+            if (!string.IsNullOrEmpty(config.Homunculus) && Catalog.TryGetOption(config.Homunculus, out current)) subtitle += BreaksRulesNote(current);
+            OpenPicker("HOMUNCULUS", subtitle, entries, null);
         }
 
         /// <summary>Starting alloys a run can be given, besides the game's own amount.</summary>
@@ -644,7 +735,7 @@ namespace VoidCrewShipCustomizer
             {
                 int chosen = level;
                 bool current = config.FabricatorLevel == level;
-                entries.Add(new PickerPanel.Entry
+                entries.Add(Limited(new PickerPanel.Entry
                 {
                     Name = "FABRICATOR " + CustomLoadouts.FabricatorLevelName(level),
                     Detail = details[level],
@@ -652,19 +743,26 @@ namespace VoidCrewShipCustomizer
                     Current = current,
                     Tag = current ? "CHOSEN" : "",
                     OnPick = () => Edit(hull, c => c.FabricatorLevel = chosen)
-                });
+                }, MatchRules.FabricatorLevelAllowed(level)));
             }
             string subtitle = !alloys
                 ? "Ship 2's fabricator level. Its own starting alloys need a newer Void Crew Fleet; until then both ships start with ship 1's."
                 : (shipTwo ? "What ship 2's fabricator starts with" : "What the ship's fabricator starts with") +
                   ": alloys to print and upgrade with, and its level. Saved runs keep what they had.";
+            if (FleetLink.ShipRulesActive)
+            {
+                int max = FleetLink.MaxStartAlloys;
+                string alloyRule = max < 0 ? "the game's own alloys only" : (max == int.MaxValue ? "any alloys" : "up to " + max + " alloys");
+                subtitle += " This match allows " + alloyRule + " and a fabricator up to " +
+                            CustomLoadouts.FabricatorLevelName(MatchRules.AllowedFabricatorLevel(HullConfig.MaxFabricatorLevel)) + ".";
+            }
             OpenPicker("FABRICATOR", subtitle, entries, null);
         }
 
         private static PickerPanel.Entry AlloyEntry(HullInfo hull, int amount, int currentAmount, string name, string detail)
         {
             bool current = currentAmount == amount;
-            return new PickerPanel.Entry
+            return Limited(new PickerPanel.Entry
             {
                 Name = name,
                 Detail = detail,
@@ -672,7 +770,22 @@ namespace VoidCrewShipCustomizer
                 Current = current,
                 Tag = current ? "CHOSEN" : "",
                 OnPick = () => Edit(hull, c => c.Alloys = amount)
-            };
+            }, MatchRules.AlloysAllowed(amount));
+        }
+
+        /// <summary>A FABRICATOR choice the match rules don't allow: greyed out, or, when it is the current one, marked.</summary>
+        private static PickerPanel.Entry Limited(PickerPanel.Entry entry, bool allowed)
+        {
+            if (allowed) return entry;
+            entry.TagColor = Ui.Warning;
+            if (entry.Current)
+            {
+                entry.Tag = "CHOSEN · " + MatchRules.NotAllowedTag;
+                return entry;
+            }
+            entry.Enabled = false;
+            entry.Tag = MatchRules.NotAllowedTag;
+            return entry;
         }
 
         /// <summary>
@@ -869,13 +982,20 @@ namespace VoidCrewShipCustomizer
             if (host == null) return;
             CloseOverlays();
             bool editable = CustomLoadouts.CanEdit(hull);
-            _storage = new StoragePanel(host, hull, () => CustomLoadouts.ConfigToShow(hull), editable, CustomLoadouts.WhyNotEditable(), TeamColor(),
+            _storage = new StoragePanel(host, hull, () => CustomLoadouts.ConfigToShow(hull), editable, CustomLoadouts.WhyNotEditable(), TeamColor(), NotAllowedInMatch,
                 (shelf, index) => OpenItemPicker(hull, shelf, index),
                 action =>
                 {
                     if (action == "empty") Edit(hull, EmptyStorage);
                     else if (action == "copy") OpenLoadPicker(hull, true);
                 });
+        }
+
+        /// <summary>Whether a storage item breaks this match's rules (always false outside a Fleet Battle).</summary>
+        private static bool NotAllowedInMatch(string code)
+        {
+            Option option;
+            return !string.IsNullOrEmpty(code) && Catalog.TryGetOption(code, out option) && MatchRules.WhyRefused(option) != null;
         }
 
         private static void OpenItemPicker(HullInfo hull, ShelfInfo shelf, int index)
@@ -893,13 +1013,19 @@ namespace VoidCrewShipCustomizer
             bool anyItem = Settings.AnyItemOnAnyRack.Value;
             foreach (Option option in Catalog.ItemOptions)
             {
+                // A Fleet Battle never offers relics (so no RELICS tab), the Armory Exchange Key, or Placeholder crates and mods.
+                if (MatchRules.Hidden(option)) continue;
                 bool fits = anyItem || Catalog.ShelfAccepts(shelf, option);
                 bool isCurrent = option.Code == currentCode;
+                bool notAllowed = MatchRules.WhyRefused(option) != null;
                 string rarity = Ui.RarityName(option.Rarity);
+                // A Blessed Homunculus on a rack shows its blessing, as in the HOMUNCULUS menu.
+                string blessing = Catalog.IsHomunculus(option.Code) ? Catalog.BlessingOf(option) : null;
                 var entry = new PickerPanel.Entry
                 {
                     Name = option.Name,
-                    Detail = option.Kind == OptionKind.WeaponCrate ? "Inscribed crate: build this weapon on any free hardpoint" + (rarity.Length > 0 ? "  ·  " + rarity : "") : rarity,
+                    Detail = blessing ?? (option.Kind == OptionKind.WeaponCrate ? "Inscribed crate: build this weapon on any free hardpoint" + (rarity.Length > 0 ? "  ·  " + rarity : "") : rarity),
+                    DetailBright = blessing != null,
                     Icon = option.Icon,
                     Accent = Ui.RarityColor(option.Rarity),
                     Category = option.Category,
@@ -909,8 +1035,15 @@ namespace VoidCrewShipCustomizer
                 };
                 if (isCurrent)
                 {
-                    entry.Tag = "IN THIS SLOT";
+                    entry.Tag = notAllowed ? "IN THIS SLOT · " + MatchRules.NotAllowedTag : "IN THIS SLOT";
+                    if (notAllowed) entry.TagColor = Ui.Warning;
                     entry.OnPick = () => { };
+                }
+                else if (notAllowed)
+                {
+                    entry.Enabled = false;
+                    entry.Tag = MatchRules.NotAllowedTag;
+                    entry.TagColor = Ui.Warning;
                 }
                 else if (!fits)
                 {
@@ -928,7 +1061,7 @@ namespace VoidCrewShipCustomizer
             }
 
             Option current;
-            string subtitle = !string.IsNullOrEmpty(currentCode) && Catalog.TryGetOption(currentCode, out current) ? "Now: " + current.Name + "." : "Empty.";
+            string subtitle = !string.IsNullOrEmpty(currentCode) && Catalog.TryGetOption(currentCode, out current) ? "Now: " + current.Name + "." + BreaksRulesNote(current) : "Empty.";
             if (anyItem) subtitle += " Any item fits any rack slot; big items can stick out of small slots.";
             else if (refused > 0) subtitle += " Greyed-out items are ones this rack normally refuses (see the AnyItemOnAnyRack setting).";
             Option currentOption;

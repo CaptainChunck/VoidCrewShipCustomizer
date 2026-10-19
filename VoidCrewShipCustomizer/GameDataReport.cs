@@ -57,7 +57,26 @@ namespace VoidCrewShipCustomizer
                 text.AppendLine();
 
                 text.AppendLine("== HOMUNCULUS VARIANTS IN GAME LOADOUTS ==");
-                foreach (Option option in Catalog.HomunculusOptions) text.AppendLine("  " + option.Name + "  " + option.Code);
+                foreach (Option option in Catalog.HomunculusOptions)
+                {
+                    text.AppendLine("  " + option.Name + "  " + option.Code);
+                    // The description the blessing is read from, then what the menus show of it.
+                    string body = option.Context != null ? option.Context.BodyText : null;
+                    text.AppendLine("    description: " + (body ?? "(none)").Replace("\r", "").Replace("\n", " / "));
+                    text.AppendLine("    blessing shown: " + (Catalog.BlessingOf(option) ?? "(none found)").Replace("\n", " / "));
+                }
+                text.AppendLine();
+
+                // What Void Crew Fleet's SHIP RULES tab can allow or refuse (ShipCustomizerApi.GetRuleOptions), and what a
+                // Fleet Battle never allows.
+                string[] ruleOptions = MatchRules.RuleOptions();
+                text.AppendLine("== FLEET BATTLE RULE OPTIONS (" + ruleOptions.Length + "; code|category|tier|name) ==");
+                foreach (string line in ruleOptions) text.AppendLine("  " + line);
+                text.AppendLine("  never in a Fleet Battle:");
+                foreach (Option option in Catalog.SlotOptions.Concat(Catalog.ItemOptions).Where(o => MatchRules.AlwaysBanned(o) != null))
+                {
+                    text.AppendLine("    " + RichText.Plain(option.Name) + "  " + option.Code + "  (" + MatchRules.AlwaysBanned(option) + ")");
+                }
                 text.AppendLine();
 
                 text.AppendLine("== TERMINAL SCREEN LAYOUT ==");

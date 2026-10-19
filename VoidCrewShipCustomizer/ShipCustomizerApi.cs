@@ -137,12 +137,38 @@ namespace VoidCrewShipCustomizer
             {
                 HullInfo hull;
                 if (!FleetLink.Running || GetDef(loadout) == null || !CustomLoadouts.TryGetHullOfCustomGuid(loadout, out hull)) return -1;
-                return LoadoutStore.Get(hull, 2).Alloys;
+                // In a Fleet Battle, no more than the match rules allow (0.7.0).
+                return MatchRules.AllowedAlloys(LoadoutStore.Get(hull, 2).Alloys);
             }
             catch (Exception e)
             {
                 Log.Failure("Reading ship 2's starting alloys", e);
                 return -1;
+            }
+        }
+
+        /// <summary>
+        /// Everything a Fleet Battle's match rules can allow or refuse on a CUSTOM ship (Void Crew Fleet's SHIP RULES tab),
+        /// one line each: "code|category|tier|name".
+        /// - code: what FleetApi.IsItemAllowed is asked: "m:" module, "w:" weapon, "i:" item or "c:" weapon crate, then the
+        ///   GUID in lower-case hex. Each code is listed once. Banning a weapon ("w:") bans its weapon crate too.
+        /// - category: what FleetApi.IsCategoryAllowed is asked, one of WEAPONS, DEFENSE, SUPPORT MODULES, AMMO &amp; POWER,
+        ///   SUPPORT ITEMS, MATERIALS, ANIMUS CRATES, WEAPON CRATES, WEAPON MODS, SPECIAL, OTHER, HOMUNCULUS (in that order).
+        /// - tier: 1 to 3 (MK I to MK III, or Common to Epic), or 0 for none, which no tier rule refuses.
+        /// - name: plain text; a Blessed Homunculus's has its blessing after a colon.
+        /// What a Fleet Battle never allows isn't listed (relics, the Armory Exchange Key, extra Fabricator modules,
+        /// Placeholder weapons). Empty until the hub has loaded. Added in 0.7.0, ApiVersion still 1.
+        /// </summary>
+        public static string[] GetRuleOptions()
+        {
+            try
+            {
+                return MatchRules.RuleOptions();
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Listing the options for Void Crew Fleet's match rules", e);
+                return new string[0];
             }
         }
 

@@ -42,10 +42,17 @@ namespace VoidCrewShipCustomizer
         public RarityType Rarity;
         public string Category;
         public int CategoryOrder;
+        /// <summary>
+        /// The category a Void Crew Fleet match's rules allow or refuse (see <see cref="MatchRules.Categories"/>). Unlike
+        /// <see cref="Category"/> it is never translated, and the module and item lists' SUPPORT get names of their own.
+        /// </summary>
+        public string RuleCategory = "OTHER";
         public bool HasSize;
         public BuildSize Size;
         public bool SingleInstance;
         public Type ModuleType;
+        /// <summary>Read once by <see cref="Catalog.BlessingOf"/>: a Blessed Homunculus's blessing, "" for none, null until read.</summary>
+        public string Blessing;
     }
 
     /// <summary>One build socket (hardpoint position) of a ship, read from the ship prefab.</summary>
@@ -307,6 +314,34 @@ namespace VoidCrewShipCustomizer
             }
         }
 
+        /// <summary>Whether an "i:" code is one of the homunculus variants (a Blessed Homunculus), wherever it is used.</summary>
+        public static bool IsHomunculus(string code)
+        {
+            return !string.IsNullOrEmpty(code) && HomunculusOptions.Any(o => o.Code == code);
+        }
+
+        /// <summary>
+        /// What a Blessed Homunculus's blessing does, from the game's own description of it (the lines under "Blessing" in
+        /// its tooltip, with the game's highlight colours), so the menus can show it without hovering; null without one.
+        /// </summary>
+        public static string BlessingOf(Option option)
+        {
+            if (option == null || option.Context == null) return null;
+            if (option.Blessing == null)
+            {
+                try
+                {
+                    option.Blessing = RichText.LastSection(option.Context.BodyText) ?? "";
+                }
+                catch (Exception e)
+                {
+                    option.Blessing = "";
+                    Log.Verbose("Could not read the blessing of " + option.Name + ": " + e.Message);
+                }
+            }
+            return option.Blessing.Length > 0 ? option.Blessing : null;
+        }
+
         public static bool TryGetOption(string code, out Option option)
         {
             option = null;
@@ -399,6 +434,7 @@ namespace VoidCrewShipCustomizer
                         Rarity = RarityOf(def.AssetGuid),
                         Category = CategoryName(ECategory.Weapons),
                         CategoryOrder = (int)ECategory.Weapons,
+                        RuleCategory = "WEAPONS",
                         HasSize = true,
                         Size = size,
                         SingleInstance = core.BuildingConstraints.AllowOnlySingleInstance,
@@ -437,6 +473,7 @@ namespace VoidCrewShipCustomizer
                         Rarity = RarityOf(def.AssetGuid),
                         Category = CategoryName(def.Category),
                         CategoryOrder = (int)def.Category,
+                        RuleCategory = ModuleRuleCategory(def.Category),
                         HasSize = true,
                         Size = size,
                         SingleInstance = prefab.BuildingConstraints.AllowOnlySingleInstance,
@@ -512,7 +549,8 @@ namespace VoidCrewShipCustomizer
                     Icon = crateIcon,
                     Rarity = weapon.Rarity,
                     Category = "WEAPON CRATES",
-                    CategoryOrder = 5
+                    CategoryOrder = 5,
+                    RuleCategory = "WEAPON CRATES"
                 });
             }
         }
@@ -533,8 +571,21 @@ namespace VoidCrewShipCustomizer
                 Icon = context.Icon,
                 Rarity = RarityOf(guid),
                 Category = category,
-                CategoryOrder = order
+                CategoryOrder = order,
+                RuleCategory = category == "SUPPORT" ? "SUPPORT ITEMS" : category
             };
+        }
+
+        /// <summary>A module's category for a match's rules: the module list's SUPPORT is SUPPORT MODULES there.</summary>
+        private static string ModuleRuleCategory(ECategory category)
+        {
+            switch (category)
+            {
+                case ECategory.Weapons: return "WEAPONS";
+                case ECategory.Defense: return "DEFENSE";
+                case ECategory.Support: return "SUPPORT MODULES";
+                default: return "OTHER";
+            }
         }
 
         private static string ItemCategoryName(PurchasableItemSubCategory category)

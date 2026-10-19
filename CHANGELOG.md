@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.0
+
+- **The HOMUNCULUS menu shows what each Blessed Homunculus's blessing does**: the text of the game's own tooltip, with
+  its highlights, so you don't have to hover over each one. Blessed Homunculi in the storage-rack list show it too.
+- **Match rules keep a Fleet Battle (Void Crew Fleet's PvP) even:**
+  - In every Fleet Battle, a CUSTOM ship never starts with relics, the Armory Exchange Key, extra Fabricator modules or
+    the game's unfinished Placeholder weapons (nor their crates, nor the Placeholder weapon mod). The menus leave them
+    out, and the storage list has no RELICS tab. Relics found during the match are yours to use.
+  - With Void Crew Fleet 0.3.0 or newer, the host sets the rest on Fleet's SHIP RULES tab:
+    - which tiers, categories and single items CUSTOM may use (banning a weapon bans its weapon crate too);
+    - the fabricator's highest level (MK I is always allowed);
+    - the most starting alloys.
+
+    The menus grey out what the rules refuse: NOT ALLOWED IN THIS MATCH.
+  - **MATCH RULES**, above the CUSTOM section, shows the rules and anything in the loadout that breaks them (the button
+    then reads BREAKS MATCH RULES), with a one-click TAKE OFF. Storage tiles that break the rules are marked NOT ALLOWED.
+  - When the mission starts, the host takes off whatever still breaks the rules, from a copy, so your saved loadouts
+    keep everything. Ship 2's starting alloys are limited too. Every player with Ship Customizer is told in the chat what
+    came off.
+- For Void Crew Fleet: a new API member, `GetRuleOptions` (ApiVersion stays 1).
+- The game-data report lists each homunculus's blessing and the match-rule options.
+
 ## 0.6.0
 
 - **SAVE LOADOUT** and **LOAD LOADOUT**:

@@ -528,12 +528,23 @@ namespace VoidCrewShipCustomizer
             entry.Module = new GameObjectRef(new ResourceAssetRef(option.PrefabGuid));
             entry.BuildBox = new CarryableRef();
             if (entry.Upgrades == null) entry.Upgrades = new ShipAssetRef[0];
-            entry.Upgrades = entry.Upgrades.Select(u => u != null && !u.IsNull && Catalog.CanSpawn(u.AssetGuid) ? u : new ShipAssetRef()).ToArray();
+            entry.Upgrades = entry.Upgrades.Select(u => u != null && !u.IsNull && Catalog.CanSpawn(u.AssetGuid) && KeepsToMatchRules(u) ? u : new ShipAssetRef()).ToArray();
             if (option.Kind == OptionKind.Weapon)
             {
                 entry.ExtraData = WeaponData(option.Guid);
             }
             return entry;
+        }
+
+        /// <summary>
+        /// In a Fleet Battle, whether something a module starts with (ammo, a power cell, a weapon mod, copied from the game's
+        /// loadouts) keeps to the match rules; anything else stays out, as on the racks.
+        /// </summary>
+        private static bool KeepsToMatchRules(ShipAssetRef content)
+        {
+            if (!MatchRules.InMatch) return true;
+            Option option;
+            return !Catalog.TryGetOption(Catalog.CodeFor(content), out option) || MatchRules.WhyRefused(option) == null;
         }
 
         private static ShipAssetRef ItemFor(string code, HullInfo hull)
@@ -664,7 +675,8 @@ namespace VoidCrewShipCustomizer
                 Notice.Show(instead + "the room is not marked [mod_session] yet.");
                 return null;
             }
-            HullConfig config = LoadoutStore.Get(hull, 2);
+            // In a Fleet Battle, without what the match rules don't allow (on a copy: the saved loadout keeps it).
+            HullConfig config = MatchRules.ForMission(hull, LoadoutStore.Get(hull, 2), 2);
             ShipLoadout loadout = Build(hull, config);
             RememberRacks(hull, loadout);
             // Continuing a saved run, the game puts the fabricators back as they were.
@@ -711,7 +723,8 @@ namespace VoidCrewShipCustomizer
                     }
                     else
                     {
-                        HullConfig config = LoadoutStore.Get(hull);
+                        // In a Fleet Battle, without what the match rules don't allow (on a copy: the saved loadout keeps it).
+                        HullConfig config = MatchRules.ForMission(hull, LoadoutStore.Get(hull), 1);
                         session.ToLoadShipData = Build(hull, config);
                         RememberRacks(hull, session.ToLoadShipData);
                         // The game's own starting amount for the run (-1 means its usual bonus from the players' ranks).
@@ -913,6 +926,7 @@ namespace VoidCrewShipCustomizer
             PendingFabricatorLevels[0] = PendingFabricatorLevels[1] = 0;
             _shipSeenAt = -1f;
             RackPlans.Clear();
+            MatchRules.OnHubLoaded();
             if (!PhotonNetwork.IsMasterClient || ResumeShip.IsNull || manager == null) return;
             GUIDUnion ship = ResumeShip;
             ResumeShip = GUIDUnion.Empty();

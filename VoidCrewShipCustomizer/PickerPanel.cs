@@ -18,6 +18,10 @@ namespace VoidCrewShipCustomizer
         {
             public string Name;
             public string Detail = "";
+            /// <summary>The detail at full brightness (it matters as much as the name, e.g. a Blessed Homunculus's blessing).</summary>
+            public bool DetailBright;
+            /// <summary>A line to read, not a choice: it can't be clicked, but isn't greyed out either.</summary>
+            public bool Info;
             public Sprite Icon;
             public Color Accent = Ui.TextDim;
             public string Tag = "";
@@ -201,7 +205,7 @@ namespace VoidCrewShipCustomizer
             if (!string.IsNullOrEmpty(entry.Detail))
             {
                 Label detail = Ui.GameText(entry.Detail, "ui-text-size__small");
-                detail.style.opacity = 0.75f;
+                detail.style.opacity = entry.DetailBright ? 1f : 0.75f;
                 texts.Add(detail);
             }
             row.Insert(at, texts);
@@ -221,6 +225,12 @@ namespace VoidCrewShipCustomizer
                 row.Add(tag);
             }
             if (entry.Current) item.AddToClassList("list-item__active");
+            if (entry.Info)
+            {
+                // Nothing to point at: no hover highlight, no click.
+                IgnorePointer(item);
+                return item;
+            }
             AddTooltip(item, entry);
 
             if (!entry.Enabled || entry.OnPick == null)
@@ -235,6 +245,12 @@ namespace VoidCrewShipCustomizer
                 pick();
             });
             return item;
+        }
+
+        private static void IgnorePointer(VisualElement element)
+        {
+            element.pickingMode = PickingMode.Ignore;
+            foreach (VisualElement child in element.Children()) IgnorePointer(child);
         }
 
         private static void AddTooltip(VisualElement element, Entry entry)
@@ -282,7 +298,7 @@ namespace VoidCrewShipCustomizer
             texts.style.flexGrow = 1;
             texts.style.flexShrink = 1;
             texts.Add(Ui.Label(entry.Name, 23, Ui.Text, true));
-            if (!string.IsNullOrEmpty(entry.Detail)) texts.Add(Ui.Label(entry.Detail, 16, Ui.TextDim));
+            if (!string.IsNullOrEmpty(entry.Detail)) texts.Add(Ui.Label(entry.Detail, 16, entry.DetailBright ? Ui.Text : Ui.TextDim));
             row.Add(texts);
 
             if (!string.IsNullOrEmpty(entry.Tag))
@@ -295,6 +311,7 @@ namespace VoidCrewShipCustomizer
                 row.Add(tag);
             }
 
+            if (entry.Info) return row;
             AddTooltip(row, entry);
 
             if (!entry.Enabled || entry.OnPick == null)

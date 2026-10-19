@@ -109,6 +109,10 @@ internal static class Program
         Field("CG.Client.Utils.CsObjectReference", "compareMethod", "CG.Client.Utils.CsObjectReference/Comparison");
         Field("CG.Client.Utils.CsObjectReference", "type", null);
         Field("CG.Client.Utils.CsObjectReference", "orbitObjectRef", null);
+
+        Console.WriteLine("Types found by name:");
+        TypeDefinition fabricator = _game.GetType("CG.Ship.Modules.FabricatorModule");
+        Check(fabricator != null, "CG.Ship.Modules.FabricatorModule exists (a Fleet Battle never allows extra Fabricator modules)");
     }
 
     private static TypeDefinition Type(string fullName)
@@ -170,6 +174,7 @@ internal static class Program
         ApiMethod(api, "SetShip2", "System.Void", "GUIDUnion");
         ApiMethod(api, "BuildShip2", "ShipLoadout", "GUIDUnion");
         ApiMethod(api, "GetShip2Alloys", "System.Int32", "GUIDUnion");
+        ApiMethod(api, "GetRuleOptions", "System.String[]");
         EventDefinition cancelled = api.Events.FirstOrDefault(e => e.Name == "Ship2CustomCancelled");
         Check(cancelled != null && cancelled.EventType.FullName == "System.Action" && cancelled.AddMethod.IsPublic && cancelled.AddMethod.IsStatic,
             "public static event System.Action Ship2CustomCancelled");
@@ -202,6 +207,30 @@ internal static class Program
         EventDefinition changed = api.Events.FirstOrDefault(e => e.Name == "TeamsChanged");
         Check(changed != null && changed.EventType.FullName == "System.Action" && changed.AddMethod.IsPublic && changed.AddMethod.IsStatic,
             "public static event System.Action TeamsChanged");
+
+        // Fleet Battle's match rules for CUSTOM ships (Void Crew Fleet 0.3.0 on); FleetLink uses them only when all are there.
+        Console.WriteLine("Void Crew Fleet's match rules API (FleetLink looks these up by name):");
+        if (api.Properties.All(p => p.Name != "ShipRulesActive"))
+        {
+            Console.WriteLine("  skip this Void Crew Fleet build has no match rules (older than 0.3.0)");
+            return;
+        }
+        ApiProperty(api, "ShipRulesActive", "System.Boolean");
+        ApiProperty(api, "FabricatorMaxLevel", "System.Int32");
+        ApiProperty(api, "MaxStartAlloys", "System.Int32");
+        ApiMethod(api, "IsTierAllowed", "System.Boolean", "System.Int32");
+        ApiMethod(api, "IsCategoryAllowed", "System.Boolean", "System.String");
+        ApiMethod(api, "IsItemAllowed", "System.Boolean", "System.String");
+        EventDefinition rulesChanged = api.Events.FirstOrDefault(e => e.Name == "ShipRulesChanged");
+        Check(rulesChanged != null && rulesChanged.EventType.FullName == "System.Action" && rulesChanged.AddMethod.IsPublic && rulesChanged.AddMethod.IsStatic,
+            "public static event System.Action ShipRulesChanged");
+    }
+
+    private static void ApiProperty(TypeDefinition api, string name, string type)
+    {
+        PropertyDefinition property = api.Properties.FirstOrDefault(p => p.Name == name);
+        Check(property != null && property.GetMethod != null && property.GetMethod.IsPublic && property.GetMethod.IsStatic && property.PropertyType.FullName == type,
+            "public static " + type + " " + name + " { get; }");
     }
 
     private static void ApiMethod(TypeDefinition api, string name, string returns, params string[] parameters)
@@ -439,6 +468,115 @@ internal static class Program
         Check(api.GetMethod("BuildShip2").Invoke(null, new[] { destroyerCustom }) == null, "no ship 2 is built");
         Check((int)api.GetMethod("GetShip2Alloys").Invoke(null, new[] { destroyerCustom }) == -1, "ship 2 has no starting alloys of its own");
         Check(!(bool)fleet.GetProperty("ReadsShip2Alloys").GetValue(null, null), "the FABRICATOR menu doesn't offer ship 2's alloys");
+        Check(!(bool)fleet.GetProperty("ShipRulesActive").GetValue(null, null) && (bool)fleet.GetMethod("IsTierAllowed").Invoke(null, new object[] { 3 }) &&
+              (bool)fleet.GetMethod("IsCategoryAllowed").Invoke(null, new object[] { "WEAPONS" }) && (bool)fleet.GetMethod("IsItemAllowed").Invoke(null, new object[] { "w:0123456789abcdef0123456789abcdef" }) &&
+              (int)fleet.GetProperty("FabricatorMaxLevel").GetValue(null, null) == 2 && (int)fleet.GetProperty("MaxStartAlloys").GetValue(null, null) == int.MaxValue,
+            "no match rules: every tier, category and item, MK III and any alloys are allowed");
+        var ruleOptions = (string[])api.GetMethod("GetRuleOptions").Invoke(null, null);
+        Check(ruleOptions != null && ruleOptions.Length == 0, "GetRuleOptions answers with an empty list before the hub has loaded");
+
+        MatchRuleChecks(plugin, config, hullInfo);
+    }
+
+    // ------------------------------------------------------------------ 0.7.0: Fleet Battle match rules, blessings
+
+    private static void MatchRuleChecks(Assembly plugin, Type config, object hullInfo)
+    {
+        Console.WriteLine("Fleet Battle match rules:");
+        Type rules = plugin.GetType("VoidCrewShipCustomizer.MatchRules", true);
+        Type optionType = plugin.GetType("VoidCrewShipCustomizer.Option", true);
+        Type kind = plugin.GetType("VoidCrewShipCustomizer.OptionKind", true);
+        Type rarity = System.Type.GetType("CG.Ship.Object.RarityType, Assembly-CSharp", true);
+        Func<string, string, string, string, string, object> option = (code, optionKind, name, rarityName, ruleCategory) =>
+        {
+            object o = Activator.CreateInstance(optionType);
+            optionType.GetField("Code").SetValue(o, code);
+            optionType.GetField("Kind").SetValue(o, Enum.Parse(kind, optionKind));
+            optionType.GetField("Name").SetValue(o, name);
+            optionType.GetField("Rarity").SetValue(o, Enum.Parse(rarity, rarityName));
+            optionType.GetField("RuleCategory").SetValue(o, ruleCategory);
+            return o;
+        };
+        MethodInfo tierOf = rules.GetMethod("TierOf");
+        MethodInfo alwaysBanned = rules.GetMethod("AlwaysBanned");
+        object arcShield3 = option("m:9c90e05e9d35b07448983ce63547616a", "Module", "Arc Shield MkIII", "Epic", "DEFENSE");
+        object lance2 = option("w:0123456789abcdef0123456789abcdef", "Weapon", "<b>B.R.A.I.N.</b>: Absolver Lance MkII", "Rare", "WEAPONS");
+        object point1 = option("m:1828a943bdb98d84f96415a6130120fd", "Module", "Kinetic Point Defense MkI", "Common", "DEFENSE");
+        object crate = option("i:6e877538ce61f0a42a31e75d800171e4", "Item", "Heavy Caliber: Medium Crate", "Rare", "AMMO & POWER");
+        object relic = option("i:6810d852c8fc354458dd401c57fde7a1", "Item", "Astral Gravity Well", "Legendary", "RELICS");
+        object placeholder = option("w:224467f966b840d458b207ffe12a6f1f", "Weapon", "Placeholder", "None", "WEAPONS");
+        object placeholderCrate = option("c:180af8388bfe78641aac04e8bf9f2300", "WeaponCrate", "Placeholder", "Common", "WEAPON CRATES");
+        object newPlaceholder = option("w:00000000000000000000000000000001", "Weapon", "Placeholder", "Epic", "WEAPONS");
+        object fabricator = option("m:e6922b2332bafa64a8872faa181d6fc6", "Module", "Fabricator", "None", "SUPPORT MODULES");
+        object armoryKey = option("i:94d959e4b33888a4dafaa5f054d7c492", "Item", "Armory Exchange Key", "Special", "SPECIAL");
+        object relicShrine = option("i:59d0f5d46d3660b4a984ec03824d38a4", "Item", "Relic Shrine", "Epic", "ANIMUS CRATES");
+        Check((int)tierOf.Invoke(null, new[] { arcShield3 }) == 3 && (int)tierOf.Invoke(null, new[] { lance2 }) == 2 && (int)tierOf.Invoke(null, new[] { point1 }) == 1,
+            "the MK in a name gives the tier (MkIII 3, MkII 2, MkI 1), tags and all");
+        Check((int)tierOf.Invoke(null, new[] { crate }) == 2 && (int)tierOf.Invoke(null, new[] { relic }) == 0 && (int)tierOf.Invoke(null, new[] { placeholder }) == 0,
+            "without a MK the rarity gives it (Rare 2); Legendary and no rarity are tier 0");
+        Check(new[] { relic, placeholder, placeholderCrate, newPlaceholder, fabricator, armoryKey }.All(o => alwaysBanned.Invoke(null, new[] { o }) != null),
+            "never in a Fleet Battle: relics, Placeholder weapons and their crates (by id or name), the Fabricator modules, the Armory Exchange Key");
+        Check(new[] { arcShield3, lance2, point1, crate, relicShrine }.All(o => alwaysBanned.Invoke(null, new[] { o }) == null),
+            "everything else may be (the Relic Shrine animus crate isn't a relic)");
+        var categories = (string[])rules.GetField("Categories").GetValue(null);
+        Check(categories.Length == 12 && !categories.Contains("RELICS") && categories[2] == "SUPPORT MODULES" && categories[4] == "SUPPORT ITEMS" && categories[11] == "HOMUNCULUS",
+            "the rules' 12 categories, without RELICS, as agreed with Void Crew Fleet");
+
+        // Outside a Fleet Battle (and without Void Crew Fleet) nothing is refused, hidden or taken off.
+        Check(rules.GetMethod("WhyRefused").Invoke(null, new[] { relic }) == null && !(bool)rules.GetMethod("Hidden").Invoke(null, new[] { placeholder }),
+            "outside a Fleet Battle relics and Placeholders are offered as before");
+        object loadout = Activator.CreateInstance(config);
+        config.GetField("Alloys").SetValue(loadout, 5000);
+        config.GetField("FabricatorLevel").SetValue(loadout, 2);
+        Check(((IList)rules.GetMethod("Check").Invoke(null, new[] { hullInfo, loadout, (object)true })).Count == 0 && (int)config.GetField("Alloys").GetValue(loadout) == 5000,
+            "outside a Fleet Battle a CUSTOM loadout breaks no rules and nothing is taken off");
+        Check((int)rules.GetMethod("AllowedAlloys").Invoke(null, new object[] { 5000 }) == 5000 && (int)rules.GetMethod("AllowedFabricatorLevel").Invoke(null, new object[] { 2 }) == 2,
+            "without match rules, any alloys and MK III");
+
+        // Fleet's limits, as the rules apply them.
+        MethodInfo clamp = rules.GetMethod("ClampAlloys", BindingFlags.NonPublic | BindingFlags.Static);
+        Func<int, int, int> alloys = (amount, max) => (int)clamp.Invoke(null, new object[] { amount, max });
+        Check(alloys(5000, -1) == -1 && alloys(5000, 500) == 500 && alloys(300, 500) == 300 && alloys(5000, int.MaxValue) == 5000 && alloys(-1, 500) == -1 && alloys(100, 0) == 0,
+            "starting alloys: -1 allows only the game's own, a cap lowers what is over it, int.MaxValue allows anything");
+        MethodInfo highest = rules.GetMethod("HighestLevel", BindingFlags.NonPublic | BindingFlags.Static);
+        MethodInfo levelAllowed = rules.GetMethod("LevelAllowed", BindingFlags.NonPublic | BindingFlags.Static);
+        Func<int, int, int[], int> level = (wanted, max, tiers) => (int)highest.Invoke(null, new object[] { wanted, max, new Func<int, bool>(tiers.Contains) });
+        Check(level(2, 0, new[] { 1 }) == 0 && level(2, 2, new[] { 1, 2, 3 }) == 2 && level(2, 1, new[] { 1, 2 }) == 1,
+            "fabricator: MK I only, every tier, and up to MK II");
+        Check(level(2, 2, new[] { 1, 3 }) == 2 && level(1, 2, new[] { 1, 3 }) == 0,
+            "fabricator with a gap (MK I and MK III allowed, not MK II): MK III stays, MK II comes down to MK I");
+        Check((bool)levelAllowed.Invoke(null, new object[] { 0, 2, new Func<int, bool>(new[] { 2, 3 }.Contains) }),
+            "MK I is always allowed, even when only higher tiers are (every run starts at MK I)");
+
+        // The message telling every player what the rules took off.
+        Type sync = plugin.GetType("VoidCrewShipCustomizer.RoomSync", true);
+        Check((string)sync.GetField("NoticeKey").GetValue(null) == "SC_Notice", "the host's message is the room property SC_Notice");
+        Type json = System.Type.GetType("Newtonsoft.Json.JsonConvert, Newtonsoft.Json", true);
+        Type noticeType = plugin.GetType("VoidCrewShipCustomizer.RoomSync+RoomNotice", true);
+        object notice = Activator.CreateInstance(noticeType);
+        noticeType.GetField("N").SetValue(notice, 3);
+        noticeType.GetField("T").SetValue(notice, -2000000000);
+        noticeType.GetField("Text").SetValue(notice, "Match rules: line one\nline two");
+        object noticeBack = json.GetMethod("DeserializeObject", new[] { typeof(string), typeof(Type) })
+            .Invoke(null, new object[] { (string)json.GetMethod("SerializeObject", new[] { typeof(object) }).Invoke(null, new[] { notice }), noticeType });
+        Check((int)noticeType.GetField("N").GetValue(noticeBack) == 3 && (int)noticeType.GetField("T").GetValue(noticeBack) == -2000000000 &&
+              (string)noticeType.GetField("Text").GetValue(noticeBack) == "Match rules: line one\nline two",
+            "the message arrives whole (number, time, lines)");
+
+        // The game's descriptions with their tags: plain names, and a Blessed Homunculus's blessing.
+        Console.WriteLine("Blessings and plain names:");
+        Type richText = plugin.GetType("VoidCrewShipCustomizer.RichText", true);
+        MethodInfo plain = richText.GetMethod("Plain");
+        MethodInfo lastSection = richText.GetMethod("LastSection");
+        Check((string)plain.Invoke(null, new object[] { "<b>B.R.A.I.N.</b>: Auto-Mechanic MkI" }) == "B.R.A.I.N.: Auto-Mechanic MkI", "tags are taken out of names");
+        const string Effects = "Improved <color=#FFD200>Damage</color> and <color=#FFD200>Range</color> for <color=#FFD200>Benediction</color> Weapons.\n" +
+                               "Reduced <color=#FFD200>Fire Rate</color> for <color=#FFD200>Benediction</color> Weapons.";
+        const string Intro = "Place in the <color=#FFD200>Central Computer Cradle</color> to allow <color=#FFD200>Ship Power-on</color>.\n<i>The Voice of METEM.</i>";
+        Func<string, string> blessing = body => (string)lastSection.Invoke(null, new object[] { body });
+        Check(blessing(Intro + "\n\n<b>Blessing</b>\n" + Effects) == Effects, "a blessing is the lines under the bold Blessing heading, highlights kept");
+        Check(blessing(Intro + "\r\n\r\n<color=#FFFFFF><b>Blessing</b></color>\r\n" + Effects.Replace("\n", "\r\n") + "\r\n") == Effects, "the same with a coloured heading and Windows line ends");
+        Check(blessing(Intro + "\n\nBlessing\n" + Effects) == Effects, "a heading without bold: the last paragraph, without its heading");
+        Check(blessing(Intro) == null && blessing("") == null, "the standard homunculus (one paragraph, no heading) has no blessing");
     }
 
     private static void AddSocket(IList sockets, Type vector3, object right, object forward, string size, float x, float y, float z)

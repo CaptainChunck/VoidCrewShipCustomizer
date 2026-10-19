@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Client.Player.Interactions;
 using UI.Core;
 using UnityEngine;
@@ -20,6 +21,7 @@ namespace VoidCrewShipCustomizer
         private readonly Func<HullConfig> _config;
         private readonly bool _editable;
         private readonly string _viewOnlyReason;
+        private readonly Func<string, bool> _notAllowed;
         private readonly Action<ShelfInfo, int> _onSlotClicked;
 
         public Action<string> OnAction;
@@ -32,13 +34,15 @@ namespace VoidCrewShipCustomizer
 
         /// <param name="viewOnlyReason">Why the racks can't be changed, shown when <paramref name="editable"/> is false.</param>
         /// <param name="team">A Void Crew Fleet team's colour in a Fleet Battle (the frame and bars take it), otherwise null.</param>
+        /// <param name="notAllowed">Whether an item's code breaks a Fleet Battle's match rules (its tile is marked).</param>
         public StoragePanel(VisualElement host, HullInfo hull, Func<HullConfig> config, bool editable, string viewOnlyReason, Color? team,
-                            Action<ShelfInfo, int> onSlotClicked, Action<string> onAction)
+                            Func<string, bool> notAllowed, Action<ShelfInfo, int> onSlotClicked, Action<string> onAction)
         {
             _hull = hull;
             _config = config;
             _editable = editable;
             _viewOnlyReason = viewOnlyReason;
+            _notAllowed = notAllowed;
             _onSlotClicked = onSlotClicked;
             OnAction = onAction;
 
@@ -81,10 +85,12 @@ namespace VoidCrewShipCustomizer
             HullConfig config = _config();
             int slots = 0;
             foreach (ShelfInfo shelf in _hull.Shelves) slots += shelf.Slots.Count;
+            int notAllowed = _notAllowed == null ? 0 : config.Storage.Values.Where(rack => rack != null).Sum(rack => rack.Count(_notAllowed));
             _summary.text = _hull.Shelves.Count == 0
                 ? "This ship has no storage racks the customizer can fill."
                 : string.Format("{0} of {1} slots filled. {2}", config.StoredCount, slots,
-                    _editable ? "Click a slot to choose what the ship starts with there." : _viewOnlyReason);
+                    _editable ? "Click a slot to choose what the ship starts with there." : _viewOnlyReason) +
+                  (notAllowed > 0 ? " " + notAllowed + " marked NOT ALLOWED break this match's rules and come off when the mission starts." : "");
 
             foreach (ShelfInfo shelf in _hull.Shelves)
             {
@@ -114,6 +120,7 @@ namespace VoidCrewShipCustomizer
         {
             Option option = null;
             bool filled = !string.IsNullOrEmpty(code) && Catalog.TryGetOption(code, out option);
+            bool notAllowed = filled && _notAllowed != null && _notAllowed(code);
 
             // A slot in the style of the terminal's module slots: square, dark, framed in the item's rarity colour.
             var tile = new VisualElement();
@@ -125,7 +132,7 @@ namespace VoidCrewShipCustomizer
             tile.style.justifyContent = Justify.Center;
             Color background = filled ? new Color(0.1f, 0.105f, 0.11f, 0.95f) : new Color(0.05f, 0.055f, 0.06f, 0.9f);
             tile.style.backgroundColor = background;
-            Ui.Border(tile, 2, filled ? Ui.RarityColor(option.Rarity) : new Color(1f, 1f, 1f, 0.12f));
+            Ui.Border(tile, 2, notAllowed ? Ui.Warning : (filled ? Ui.RarityColor(option.Rarity) : new Color(1f, 1f, 1f, 0.12f)));
 
             Label number = Ui.GameText((index + 1).ToString(), "ui-text-size__small");
             number.style.opacity = 0.6f;
@@ -133,6 +140,15 @@ namespace VoidCrewShipCustomizer
             number.style.left = 6;
             number.style.top = 2;
             tile.Add(number);
+            if (notAllowed)
+            {
+                // A Fleet Battle's match rules don't allow it: the host takes it off when the mission starts.
+                Label mark = Ui.Label("NOT ALLOWED", 12, Ui.Warning, true);
+                mark.style.position = Position.Absolute;
+                mark.style.right = 5;
+                mark.style.top = 4;
+                tile.Add(mark);
+            }
 
             if (filled)
             {

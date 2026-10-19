@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using CG.Game;
 using CG.Profile;
 using ExitGames.Client.Photon;
 using Gameplay.Hub;
@@ -35,6 +36,15 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>Player property: this player runs the Ship Customizer (the value is <see cref="Protocol"/>).</summary>
         public const string PlayerKey = "SC_Player";
+
+        /// <summary>
+        /// A message from the host for every player with the mod (what a Fleet Battle's match rules took off the CUSTOM
+        /// ships), shown in the chat once the mission has loaded: JSON of a <see cref="RoomNotice"/>.
+        /// </summary>
+        public const string NoticeKey = "SC_Notice";
+
+        /// <summary>How old a notice may be and still be shown (a mission can take a while to load).</summary>
+        private const int NoticeMaxAgeMs = 5 * 60 * 1000;
 
         /// <summary>
         /// Raised when what players exchange changes in a way older versions don't understand. 1: 0.3.0 and 0.4.0.
@@ -106,7 +116,18 @@ namespace VoidCrewShipCustomizer
             public bool FollowShip1;
         }
 
+        /// <summary>A message from the host: its number, when it was sent (Photon's server time, in ms) and its lines.</summary>
+        internal sealed class RoomNotice
+        {
+            public int N;
+            public int T;
+            public string Text;
+        }
+
         private static readonly Dictionary<int, float> FirstSeen = new Dictionary<int, float>();
+        private static int _noticeNumber;
+        private static string _lastNoticeJson;
+        private static string _pendingNotice;
         private static string _room;
         private static string _lastCustomJson;
         private static string _lastCustomJson2;
@@ -147,6 +168,55 @@ namespace VoidCrewShipCustomizer
         public static void SetRun(bool customRun)
         {
             Set(RunKey, customRun);
+        }
+
+        /// <summary>Host: a message (one or more lines) for every player with the mod, the host included, once in the mission.</summary>
+        public static void PublishNotice(string text)
+        {
+            var notice = new RoomNotice { N = ++_noticeNumber, T = PhotonNetwork.ServerTimestamp, Text = text };
+            Set(NoticeKey, JsonConvert.SerializeObject(notice, Formatting.None));
+        }
+
+        /// <summary>Host: the last message is done with.</summary>
+        public static void ClearNotice()
+        {
+            object value;
+            if (PhotonNetwork.IsMasterClient && TryGet(NoticeKey, out value) && value != null) Set(NoticeKey, null);
+        }
+
+        /// <summary>
+        /// Everyone: a new message from the host is kept until this player is in the mission with the ship spawned (not
+        /// in the hub, not while loading), then shown in the chat. Old ones (from before this player joined) are skipped.
+        /// </summary>
+        private static void ReadNotice()
+        {
+            object value;
+            TryGet(NoticeKey, out value);
+            string json = value as string;
+            if (json != _lastNoticeJson)
+            {
+                _lastNoticeJson = json;
+                _pendingNotice = null;
+                if (!string.IsNullOrEmpty(json))
+                {
+                    try
+                    {
+                        var notice = JsonConvert.DeserializeObject<RoomNotice>(json);
+                        if (notice != null && !string.IsNullOrEmpty(notice.Text) && unchecked(PhotonNetwork.ServerTimestamp - notice.T) < NoticeMaxAgeMs) _pendingNotice = notice.Text;
+                    }
+                    catch (Exception e)
+                    {
+                        Log.Failure("Reading the host's message", e);
+                    }
+                }
+            }
+            if (_pendingNotice == null || GameSessionManager.InHub || ClientGame.Current == null || ClientGame.Current.PlayerShip == null) return;
+            string text = _pendingNotice;
+            _pendingNotice = null;
+            foreach (string line in text.Split('\n'))
+            {
+                if (line.Length > 0) Notice.Show(line);
+            }
         }
 
         private static void Set(string key, object value)
@@ -537,6 +607,8 @@ namespace VoidCrewShipCustomizer
                 _room = room;
                 _lastCustomJson = null;
                 _lastCustomJson2 = null;
+                _lastNoticeJson = null;
+                _pendingNotice = null;
                 FirstSeen.Clear();
                 ForgetShared();
                 CustomLoadouts.OnRoomChanged();
@@ -544,6 +616,8 @@ namespace VoidCrewShipCustomizer
             if (room == null) return;
 
             TrackPlayers();
+            // The host's messages are for the mission, so they are read there too.
+            ReadNotice();
             // Only once in the hub: the host checks for the tag as soon as players are able to send it.
             if (HubShipManager.Instance == null) return;
             // A player whose CUSTOM patches failed can't pause their progression, so they don't count as having the mod.
