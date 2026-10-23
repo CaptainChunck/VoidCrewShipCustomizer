@@ -20,6 +20,12 @@ namespace VoidCrewShipCustomizer
         private static bool _hostRunAnnounced;
         private static bool _roomRun;
         private static string _rememberedRun;
+        /// <summary>The mission the pause belongs to, once it has been seen running.</summary>
+        private static GameSession _runSession;
+        /// <summary>The room was left during the run: the pause ends once that mission is gone, not before.</summary>
+        private static bool _leftRoom;
+        /// <summary>Since the room was left, the run's mission has been seen gone (the game drops it as the room is left).</summary>
+        private static bool _sessionGone;
 
         public static bool Active
         {
@@ -45,11 +51,20 @@ namespace VoidCrewShipCustomizer
             if (PhotonNetwork.IsMasterClient) RoomSync.SetRun(false, null);
         }
 
-        /// <summary>Left the room (or joined another): this room's run is none of the next one's business.</summary>
+        /// <summary>
+        /// Left the room (or joined another). The game saves a mission's stats while it unloads the mission
+        /// (PlayerMetricTracker.OnDisable), which happens after the room is gone when a player quits to the main menu,
+        /// follows an invite or is disconnected. So the pause holds until the hub loads or another mission runs (see
+        /// <see cref="Poll"/>); the main menu in between has no progression to pause.
+        /// </summary>
         public static void OnRoomChanged()
         {
-            if (Active) Log.Info("Left the CUSTOM run's room: progression is on again.");
-            Reset();
+            if (!Active)
+            {
+                Reset();
+                return;
+            }
+            _leftRoom = true;
         }
 
         private static void Reset()
@@ -58,6 +73,9 @@ namespace VoidCrewShipCustomizer
             _roomRun = false;
             _hostRunAnnounced = false;
             _rememberedRun = null;
+            _runSession = null;
+            _leftRoom = false;
+            _sessionGone = false;
         }
 
         /// <summary>Called a few times a second.</summary>
@@ -67,7 +85,11 @@ namespace VoidCrewShipCustomizer
             GameSession session;
             try
             {
-                if (GameSessionManager.Instance == null) return;
+                if (GameSessionManager.Instance == null)
+                {
+                    if (_leftRoom) _sessionGone = true;
+                    return;
+                }
                 inHub = GameSessionManager.InHub;
                 session = GameSessionManager.ActiveSession;
             }
@@ -75,7 +97,21 @@ namespace VoidCrewShipCustomizer
             {
                 return;
             }
+            // The room was left mid-run: the run is over in the hub or in another mission. Not when the session is merely
+            // gone: the game drops it as the room is left (PhotonService.OnLeftRoom), before it unloads the mission and
+            // saves its stats. A mission that comes after that is another one, even if the run's was never seen.
+            if (_leftRoom)
+            {
+                if (session == null) _sessionGone = true;
+                bool otherMission = session != null && (_runSession != null ? !ReferenceEquals(session, _runSession) : _sessionGone);
+                if (inHub || otherMission)
+                {
+                    Log.Info("The CUSTOM run's mission is over: progression is on again.");
+                    Reset();
+                }
+            }
             if (inHub || session == null) return;
+            if (Active && !_leftRoom && _runSession == null) _runSession = session;
 
             // Everyone, the host included: a host that left mid-run hands the run over with the room.
             if (!_roomRun && RoomSaysCustomRun(session.GameSessionID))
@@ -100,11 +136,18 @@ namespace VoidCrewShipCustomizer
             }
         }
 
-        /// <summary>The room's word that this mission (by its session id) is a CUSTOM run; an older host only sets SC_Run.</summary>
+        /// <summary>
+        /// The room's word that this mission (by its session id) is a CUSTOM run. SC_RunId only counts under a host on
+        /// 0.8.0 or newer, which writes and clears it; an older host only sets SC_Run, and an id an earlier host left behind
+        /// would never match its runs.
+        /// </summary>
         private static bool RoomSaysCustomRun(string sessionId)
         {
             object id;
-            if (RoomSync.TryGet(RoomSync.RunIdKey, out id) && id is string) return !string.IsNullOrEmpty(sessionId) && (string)id == sessionId;
+            if (RoomSync.HostProtocol() >= RoomSync.RunIdProtocol && RoomSync.TryGet(RoomSync.RunIdKey, out id) && id is string)
+            {
+                return !string.IsNullOrEmpty(sessionId) && (string)id == sessionId;
+            }
             object run;
             return RoomSync.TryGet(RoomSync.RunKey, out run) && run is bool && (bool)run;
         }

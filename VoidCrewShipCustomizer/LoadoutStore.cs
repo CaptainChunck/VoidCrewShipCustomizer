@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using ResourceAssets;
 using UnityEngine;
 
@@ -39,6 +40,12 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>The fabricator's starting level: 0 is MK I (how every run starts), 1 MK II, 2 MK III.</summary>
         public int FabricatorLevel;
+
+        /// <summary>What a newer version saved that this one doesn't know, kept so saving here doesn't drop it.</summary>
+        #pragma warning disable 0649 // filled in by Newtonsoft
+        [JsonExtensionData]
+        public IDictionary<string, JToken> Newer;
+        #pragma warning restore 0649
 
         public HullConfig Clone()
         {
@@ -109,6 +116,11 @@ namespace VoidCrewShipCustomizer
             /// </summary>
             public Dictionary<string, Dictionary<string, HullConfig>> MoreShips = new Dictionary<string, Dictionary<string, HullConfig>>();
             public List<string> CustomRuns = new List<string>();
+            /// <summary>What a newer version saved that this one doesn't know, kept so saving here doesn't drop it.</summary>
+            #pragma warning disable 0649 // filled in by Newtonsoft
+            [JsonExtensionData]
+            public IDictionary<string, JToken> Newer;
+            #pragma warning restore 0649
         }
 
         private const int MaxRememberedRuns = 50;
@@ -133,21 +145,8 @@ namespace VoidCrewShipCustomizer
             get
             {
                 if (_file != null) return _file;
-                string text;
-                if (SafeFile.Read(FilePath, out text) == SafeFile.ReadResult.Unreadable) _readOnly = true;
-                else if (text != null)
-                {
-                    try
-                    {
-                        _file = JsonConvert.DeserializeObject<StoreFile>(text);
-                        Log.Info("Loaded your Custom loadouts from " + FilePath + ".");
-                    }
-                    catch (Exception e)
-                    {
-                        Log.Error("Could not understand " + FilePath + ", so the Custom loadouts start fresh. The old file is kept as " + FilePath + ".broken. Details: " + e.Message);
-                        SafeFile.KeepBroken(FilePath);
-                    }
-                }
+                if (SafeFile.Load(FilePath, "your Custom loadouts", out _file) == SafeFile.ReadResult.Unreadable) _readOnly = true;
+                else if (_file != null) Log.Info("Loaded your Custom loadouts from " + FilePath + ".");
                 if (_file == null) _file = new StoreFile();
                 if (_file.Ships == null) _file.Ships = new Dictionary<string, HullConfig>();
                 if (_file.SecondShips == null) _file.SecondShips = new Dictionary<string, HullConfig>();
@@ -247,8 +246,27 @@ namespace VoidCrewShipCustomizer
             return config.Normalized();
         }
 
+        /// <summary>How long changes wait before they are written, so a burst of picks makes one save instead of many.</summary>
+        private const float SaveDelaySeconds = 1f;
+        private static bool _unsaved;
+        private static float _unsavedSince;
+
+        /// <summary>Saves the file shortly (see <see cref="Flush"/>): picks in quick succession are written together.</summary>
         public static void Save()
         {
+            if (_unsaved) return;
+            _unsaved = true;
+            _unsavedSince = Time.unscaledTime;
+        }
+
+        /// <summary>
+        /// Writes what is waiting: once it has waited <see cref="SaveDelaySeconds"/> (called a few times a second), or straight
+        /// away with <paramref name="now"/> (a CUSTOM run to remember, a mission starting, the game quitting).
+        /// </summary>
+        public static void Flush(bool now)
+        {
+            if (!_unsaved || (!now && Time.unscaledTime - _unsavedSince < SaveDelaySeconds)) return;
+            _unsaved = false;
             StoreFile file = File;
             if (_readOnly)
             {
@@ -335,7 +353,9 @@ namespace VoidCrewShipCustomizer
             if (at >= 0) File.CustomRuns.RemoveAt(at);
             File.CustomRuns.Add(gameSessionId);
             while (File.CustomRuns.Count > MaxRememberedRuns) File.CustomRuns.RemoveAt(0);
+            // Straight away: continuing this run from a save must keep progression paused, even after a crash.
             Save();
+            Flush(true);
         }
 
         public static bool WasCustomRun(string gameSessionId)

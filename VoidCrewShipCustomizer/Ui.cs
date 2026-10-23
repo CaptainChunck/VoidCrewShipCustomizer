@@ -106,12 +106,14 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>The game's hover sound when the pointer comes onto an element that can be used.</summary>
-        public static void HoverSound(VisualElement element, string key)
+        public static EventCallback<PointerEnterEvent> HoverSound(VisualElement element, string key)
         {
-            element.RegisterCallback<PointerEnterEvent>(e =>
+            EventCallback<PointerEnterEvent> callback = e =>
             {
                 if (element.enabledInHierarchy && element.pickingMode == PickingMode.Position) PlaySound(element, UIAudioEventRef.ESoundType.Hover, key);
-            });
+            };
+            element.RegisterCallback(callback);
+            return callback;
         }
 
         /// <summary>
@@ -121,14 +123,17 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         public static void Tooltip(VisualElement element, Func<ContextHoverData> data)
         {
+            bool showing = false;
             element.RegisterCallback<MouseEnterEvent>(e =>
             {
+                showing = false;
                 ContextHoverData shown = data();
                 TooltipBaseVE tip = ContextInfoController.SharedContextInfoVe;
                 if (shown == null || tip == null) return;
                 try
                 {
                     tip.Show(element, shown, null);
+                    showing = true;
                 }
                 catch (Exception ex)
                 {
@@ -138,7 +143,7 @@ namespace VoidCrewShipCustomizer
             element.RegisterCallback<MouseMoveEvent>(e =>
             {
                 TooltipBaseVE tip = ContextInfoController.SharedContextInfoVe;
-                if (tip == null || data() == null) return;
+                if (!showing || tip == null) return;
                 try
                 {
                     tip.Move(e);
@@ -148,7 +153,11 @@ namespace VoidCrewShipCustomizer
                     // Only a nicety.
                 }
             });
-            element.RegisterCallback<MouseLeaveEvent>(e => HideTooltip());
+            element.RegisterCallback<MouseLeaveEvent>(e =>
+            {
+                showing = false;
+                HideTooltip();
+            });
         }
 
         public static void Tooltip(VisualElement element, ContextInfo context, GUIDUnion guid)
@@ -342,6 +351,17 @@ namespace VoidCrewShipCustomizer
         /// <summary>Makes any element clickable with the left mouse button, the same way the game's lists are, with its list sounds.</summary>
         public static Clickable Click(VisualElement element, Action onClick)
         {
+            Clickable clickable = ClickOnly(element, onClick);
+            HoverSound(element, "list");
+            return clickable;
+        }
+
+        /// <summary>
+        /// <see cref="Click"/> without the hover sound, for an element whose callbacks are taken off again later (the hover
+        /// sound is then registered with <see cref="HoverSound"/> and removed with the rest).
+        /// </summary>
+        public static Clickable ClickOnly(VisualElement element, Action onClick)
+        {
             var clickable = new Clickable(() =>
             {
                 PlaySound(element, UIAudioEventRef.ESoundType.Click, "list");
@@ -355,7 +375,6 @@ namespace VoidCrewShipCustomizer
                 }
             });
             element.AddUnfilteredClickable(clickable);
-            HoverSound(element, "list");
             return clickable;
         }
 

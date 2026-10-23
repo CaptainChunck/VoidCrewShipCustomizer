@@ -23,6 +23,7 @@ namespace VoidCrewShipCustomizer
         private const int MaxJsonLength = 200000;
 
         private static readonly Regex Code = new Regex(@"SC([01])-([A-Za-z0-9_-]+)");
+        private static readonly Regex HullHex = new Regex("^[0-9A-Fa-f]{32}$");
 
         private sealed class Shared
         {
@@ -78,7 +79,13 @@ namespace VoidCrewShipCustomizer
                     why = "the share code is incomplete";
                     return false;
                 }
-                hullHex = shared.Hull;
+                // A ship type's GUID: 32 hex digits (a hand-made code could hold anything).
+                if (!HullHex.IsMatch(shared.Hull))
+                {
+                    why = "the share code is damaged (was all of it copied?)";
+                    return false;
+                }
+                hullHex = shared.Hull.ToLowerInvariant();
                 config = shared.Config.Normalized();
                 return true;
             }

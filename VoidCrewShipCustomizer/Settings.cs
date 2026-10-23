@@ -29,8 +29,8 @@ namespace VoidCrewShipCustomizer
                 "List quest items in the storage-rack picker. Starting a mission with them can confuse its objectives.");
 
             WriteGameDataReport = config.Bind("Diagnostics", "WriteGameDataReport", true,
-                "The first time you open the ship loadout terminal, write every ship, slot, module, weapon and item the customizer found to " +
-                "'ShipCustomizer\\game-data.txt' in the game's save folder (%USERPROFILE%\\AppData\\LocalLow\\Hutlihut Games ApS\\Void Crew).");
+                "After an update of the mod or the game, when the ship loadout terminal first loads, write every ship, slot, module, weapon and item " +
+                "the customizer found to 'ShipCustomizer\\game-data.txt' in the game's save folder (%USERPROFILE%\\AppData\\LocalLow\\Hutlihut Games ApS\\Void Crew).");
             VerboseLogging = config.Bind("Diagnostics", "VerboseLogging", false,
                 "Write extra detail to the BepInEx log.");
         }

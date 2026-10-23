@@ -64,6 +64,28 @@ namespace VoidCrewShipCustomizer
             {
                 Log.Failure("Setting the fabricator's CUSTOM level", e);
             }
+
+            try
+            {
+                LoadoutStore.Flush(false);
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Saving the CUSTOM loadouts", e);
+            }
+        }
+
+        /// <summary>Changes still waiting to be written are saved before the game closes.</summary>
+        private void OnApplicationQuit()
+        {
+            try
+            {
+                LoadoutStore.Flush(true);
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Saving the CUSTOM loadouts as the game closes", e);
+            }
         }
     }
 }

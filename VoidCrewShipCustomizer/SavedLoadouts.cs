@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace VoidCrewShipCustomizer
 {
@@ -23,6 +24,11 @@ namespace VoidCrewShipCustomizer
             /// <summary>When it was saved (local time), as the list shows it.</summary>
             public string SavedAt = "";
             public HullConfig Config;
+            /// <summary>What a newer version saved that this one doesn't know, kept so saving here doesn't drop it.</summary>
+            #pragma warning disable 0649 // filled in by Newtonsoft
+            [JsonExtensionData]
+            public IDictionary<string, JToken> Newer;
+            #pragma warning restore 0649
         }
 
         internal sealed class SavedFile
@@ -30,6 +36,11 @@ namespace VoidCrewShipCustomizer
             public int Version = 1;
             /// <summary>By ship type (its GUID in hex).</summary>
             public Dictionary<string, List<Saved>> Ships = new Dictionary<string, List<Saved>>();
+            /// <summary>What a newer version saved that this one doesn't know, kept so saving here doesn't drop it.</summary>
+            #pragma warning disable 0649 // filled in by Newtonsoft
+            [JsonExtensionData]
+            public IDictionary<string, JToken> Newer;
+            #pragma warning restore 0649
         }
 
         private static SavedFile _file;
@@ -46,20 +57,7 @@ namespace VoidCrewShipCustomizer
             get
             {
                 if (_file != null) return _file;
-                string text;
-                if (SafeFile.Read(FilePath, out text) == SafeFile.ReadResult.Unreadable) _readOnly = true;
-                else if (text != null)
-                {
-                    try
-                    {
-                        _file = JsonConvert.DeserializeObject<SavedFile>(text);
-                    }
-                    catch (Exception e)
-                    {
-                        Log.Error("Could not understand " + FilePath + ", so there are no saved loadouts. The old file is kept as " + FilePath + ".broken. Details: " + e.Message);
-                        SafeFile.KeepBroken(FilePath);
-                    }
-                }
+                if (SafeFile.Load(FilePath, "your saved loadouts", out _file) == SafeFile.ReadResult.Unreadable) _readOnly = true;
                 _file = Normalize(_file);
                 return _file;
             }
@@ -100,10 +98,10 @@ namespace VoidCrewShipCustomizer
             return File.Ships.TryGetValue(hull.ShipGuid.AsHex(), out saved) ? saved.ToList() : new List<Saved>();
         }
 
-        /// <summary>Saves a copy of this CUSTOM loadout in a slot (replacing what was there).</summary>
-        public static void Save(HullInfo hull, int slot, HullConfig config)
+        /// <summary>Saves a copy of this CUSTOM loadout in a slot (replacing what was there). False when it couldn't be saved.</summary>
+        public static bool Save(HullInfo hull, int slot, HullConfig config)
         {
-            if (slot < 1 || slot > SlotCount || config == null) return;
+            if (slot < 1 || slot > SlotCount || config == null) return false;
             List<Saved> saved;
             if (!File.Ships.TryGetValue(hull.ShipGuid.AsHex(), out saved))
             {
@@ -113,7 +111,7 @@ namespace VoidCrewShipCustomizer
             saved.RemoveAll(s => s.Slot == slot);
             saved.Add(new Saved { Slot = slot, SavedAt = DateTime.Now.ToString("d MMM HH:mm", CultureInfo.InvariantCulture), Config = config.Clone().Normalized() });
             saved.Sort((a, b) => a.Slot.CompareTo(b.Slot));
-            Write();
+            return Write();
         }
 
         public static void Clear(HullInfo hull, int slot)
@@ -122,21 +120,23 @@ namespace VoidCrewShipCustomizer
             if (File.Ships.TryGetValue(hull.ShipGuid.AsHex(), out saved) && saved.RemoveAll(s => s.Slot == slot) > 0) Write();
         }
 
-        private static void Write()
+        private static bool Write()
         {
             SavedFile file = File;
             if (_readOnly)
             {
                 Log.WarnOnce("saved read only", "Your saved loadouts are not saved this session: " + FilePath + " could not be read when the game started.");
-                return;
+                return false;
             }
             try
             {
                 SafeFile.Write(FilePath, JsonConvert.SerializeObject(file, Formatting.Indented));
+                return true;
             }
             catch (Exception e)
             {
                 Log.Failure("Saving your loadouts to " + FilePath, e);
+                return false;
             }
         }
     }

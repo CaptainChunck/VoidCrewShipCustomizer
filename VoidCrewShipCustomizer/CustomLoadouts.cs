@@ -37,6 +37,11 @@ namespace VoidCrewShipCustomizer
             public GUIDUnion Guid;
             public ShipLoadoutDataDef Def;
             public ShipLoadoutData Data;
+            /// <summary>
+            /// The ship and description the terminal shows are out of date. They are built just before the terminal shows
+            /// them (<see cref="EnsureBuilt"/>), so loading the hub reads no modules, and many changes at once build once.
+            /// </summary>
+            public bool Stale = true;
         }
 
         public const string Header = "CUSTOM";
@@ -49,6 +54,8 @@ namespace VoidCrewShipCustomizer
 
         private static readonly Dictionary<GUIDUnion, Entry> ByShip = new Dictionary<GUIDUnion, Entry>();
         private static readonly Dictionary<GUIDUnion, Entry> ByGuid = new Dictionary<GUIDUnion, Entry>();
+        /// <summary>Each ship type's stand-in loadout as JSON, which every CUSTOM ship of that type is built from.</summary>
+        private static readonly Dictionary<GUIDUnion, JObject> BaseLoadouts = new Dictionary<GUIDUnion, JObject>();
         private static readonly FieldInfo HeaderTextField = AccessTools.Field(typeof(ContextInfo), "headerTextDefaultable");
         private static readonly FieldInfo BodyTextField = AccessTools.Field(typeof(ContextInfo), "bodyTextDefaultable");
 
@@ -125,6 +132,8 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>Who last changed each part of each loadout ("hull/ship/part"), for the messages when two players collide.</summary>
         private static readonly Dictionary<string, string> PartEditors = new Dictionary<string, string>();
+        /// <summary>The actor number of who last changed each part, so a player's quick second change isn't refused as their own conflict.</summary>
+        private static readonly Dictionary<string, int> PartEditorActors = new Dictionary<string, int>();
         /// <summary>Who last changed each loadout ("hull/ship"), as seen by a player other than the host.</summary>
         private static readonly Dictionary<string, string> LayoutEditors = new Dictionary<string, string>();
         private static readonly Dictionary<string, float> LastChangeToast = new Dictionary<string, float>();
@@ -208,7 +217,9 @@ namespace VoidCrewShipCustomizer
             data.name = "ShipCustomizer " + hull.Name;
             data.hideFlags = HideFlags.DontUnloadUnusedAsset;
             data.ContainerGuid = guid;
-            data.ShipLoadout = Build(hull, ConfigToShow(hull));
+            // The stand-in's ship until the terminal first shows CUSTOM (see EnsureBuilt): reading every module the game has
+            // takes a moment, which loading the hub shouldn't spend on a loadout nobody may look at.
+            data.ShipLoadout = hull.BasePreset.Asset.ShipLoadout;
 
             // The game's own API for assets added at runtime; ShipLoadoutDataDef.Asset finds the data through it.
             // Effect "None" keeps it off the list of assets a joining player must also have.
@@ -251,7 +262,7 @@ namespace VoidCrewShipCustomizer
             context.name = "ShipCustomizer CUSTOM " + hull.Name;
             context.hideFlags = HideFlags.DontUnloadUnusedAsset;
             if (HeaderTextField != null) HeaderTextField.SetValue(context, new DefaultableLocalizedString(Header, null));
-            if (BodyTextField != null) BodyTextField.SetValue(context, new DefaultableLocalizedString(Description(hull, ConfigToShow(hull)), null));
+            if (BodyTextField != null) BodyTextField.SetValue(context, new DefaultableLocalizedString("<b>Custom Loadout</b>", null));
             return context;
         }
 
@@ -437,7 +448,7 @@ namespace VoidCrewShipCustomizer
             if (edit.FollowShip1)
             {
                 if (edit.Ship < 2) return;
-                LoadoutStore.Forget(hull, edit.Ship);
+                FollowShip1AsHost(hull, edit.Ship);
             }
             List<string> refused = null;
             if (!edit.FollowShip1)
@@ -451,7 +462,9 @@ namespace VoidCrewShipCustomizer
                 if (edit.Base != null)
                 {
                     // Only this player's own changes, part by part: what someone else changed since they last looked stays.
-                    result = LayoutMerge.Merge(current, Sanitize(hull, edit.Base), wanted, hull.Sockets, RackSlots(hull), applied, refusedParts);
+                    // What they changed is told from what they sent; what it becomes, from it after this PC's checks.
+                    result = LayoutMerge.Merge(current, edit.Base, edit.Config, wanted, hull.Sockets, RackSlots(hull),
+                                               part => LastEditorActor(hull, edit.Ship, part) == actor, applied, refusedParts);
                 }
                 else
                 {
@@ -459,16 +472,30 @@ namespace VoidCrewShipCustomizer
                     applied.AddRange(LayoutMerge.Changed(current, wanted, hull.Sockets, RackSlots(hull)));
                     result = wanted;
                 }
-                refused = refusedParts.Select(p => PartName(hull, p) + " (" + EditorOf(hull, edit.Ship, p) + ")").ToList();
-                if (refusedParts.Count > 0) Log.Info("Kept what others changed first, instead of " + who + "'s change: " + string.Join(", ", refused.ToArray()) + ".");
-                if (applied.Count == 0 && refusedParts.Count == 0 && edit.Base != null)
+                var reasons = refusedParts.ToDictionary(p => p, p => EditorOf(hull, edit.Ship, p));
+                // One of each one-per-ship module: two players fitting the same one at once on different hardpoints. Putting
+                // one back can double another, so again until none is (each round puts at least one changed part back).
+                for (List<KeyValuePair<string, string>> doubles = DoubledSingles(hull, result, applied); doubles.Count > 0; doubles = DoubledSingles(hull, result, applied))
                 {
-                    // Nothing new (the same change again): only confirm it to the player.
+                    foreach (KeyValuePair<string, string> doubled in doubles)
+                    {
+                        LayoutMerge.Copy(current, result, hull.Sockets, doubled.Key);
+                        applied.Remove(doubled.Key);
+                        refusedParts.Add(doubled.Key);
+                        reasons[doubled.Key] = "one " + doubled.Value + " per ship";
+                    }
+                }
+                refused = refusedParts.Select(p => PartName(hull, p) + " (" + reasons[p] + ")").ToList();
+                if (refusedParts.Count > 0) Log.Info("Kept what others changed first, instead of " + who + "'s change: " + string.Join(", ", refused.ToArray()) + ".");
+                if (applied.Count == 0)
+                {
+                    // Nothing of theirs was made (all refused, or the same change again): they are told, and see the loadout
+                    // as it is. Nothing is saved: a ship that follows ship 1 keeps following it.
                     OnEdited(hull, actor, edit.N, edit.Ship, refused);
                     return;
                 }
                 LoadoutStore.Set(hull, result, edit.Ship);
-                NoteEditors(hull, edit.Ship, applied, who);
+                NoteEditors(hull, edit.Ship, applied, who, actor);
             }
             OnEdited(hull, actor, edit.N, edit.Ship, refused);
             TerminalUi.OnLoadoutChangedRemotely();
@@ -503,9 +530,14 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>Host: remembers who changed which parts of a loadout, for the messages when two players collide.</summary>
-        private static void NoteEditors(HullInfo hull, int ship, IEnumerable<string> parts, string who)
+        private static void NoteEditors(HullInfo hull, int ship, IEnumerable<string> parts, string who, int actor)
         {
-            foreach (string part in parts) PartEditors[hull.ShipGuid.AsHex() + "/" + ship + "/" + part] = who;
+            foreach (string part in parts)
+            {
+                string key = hull.ShipGuid.AsHex() + "/" + ship + "/" + part;
+                PartEditors[key] = who;
+                PartEditorActors[key] = actor;
+            }
         }
 
         /// <summary>Host: who last changed a part of a loadout, as far as this session knows.</summary>
@@ -515,12 +547,60 @@ namespace VoidCrewShipCustomizer
             return PartEditors.TryGetValue(hull.ShipGuid.AsHex() + "/" + ship + "/" + part, out who) ? who : "someone";
         }
 
+        /// <summary>
+        /// Host: ship 2 to 6 follows ship 1's CUSTOM loadout again (its own is forgotten), and so are who changed its parts:
+        /// a change made against its own loadout is a conflict now, even from the player who made the last one.
+        /// </summary>
+        public static void FollowShip1AsHost(HullInfo hull, int ship)
+        {
+            LoadoutStore.Forget(hull, ship);
+            string prefix = hull.ShipGuid.AsHex() + "/" + ship + "/";
+            foreach (string key in PartEditors.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList()) PartEditors.Remove(key);
+            foreach (string key in PartEditorActors.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList()) PartEditorActors.Remove(key);
+        }
+
+        /// <summary>Host: the actor number of the player who last changed a part of a loadout, or -1.</summary>
+        private static int LastEditorActor(HullInfo hull, int ship, string part)
+        {
+            int actor;
+            return PartEditorActors.TryGetValue(hull.ShipGuid.AsHex() + "/" + ship + "/" + part, out actor) ? actor : -1;
+        }
+
+        /// <summary>
+        /// Host, after merging a change: hardpoints the change filled with a one-per-ship module that another hardpoint
+        /// already holds (with the module's name). The one that was there first stays; if both are new, the first one does.
+        /// </summary>
+        private static List<KeyValuePair<string, string>> DoubledSingles(HullInfo hull, HullConfig result, ICollection<string> applied)
+        {
+            var doubled = new List<KeyValuePair<string, string>>();
+            var byType = new Dictionary<Type, List<string>>();
+            var names = new Dictionary<Type, string>();
+            foreach (KeyValuePair<int, string> slot in result.Slots)
+            {
+                Option option;
+                if (slot.Key < 0 || slot.Key >= hull.Sockets.Count || !Catalog.TryGetHardpointOption(slot.Value, out option) || !option.SingleInstance || option.ModuleType == null) continue;
+                List<string> parts;
+                if (!byType.TryGetValue(option.ModuleType, out parts)) byType[option.ModuleType] = parts = new List<string>();
+                string part = LayoutMerge.HardpointPart(hull.Sockets[slot.Key].Group);
+                if (!parts.Contains(part)) parts.Add(part);
+                names[option.ModuleType] = RichText.Plain(option.Name);
+            }
+            foreach (KeyValuePair<Type, List<string>> type in byType.Where(t => t.Value.Count > 1))
+            {
+                List<string> fresh = type.Value.Where(applied.Contains).ToList();
+                bool keptOne = fresh.Count < type.Value.Count;
+                foreach (string part in keptOne ? fresh : fresh.Skip(1)) doubled.Add(new KeyValuePair<string, string>(part, names[type.Key]));
+            }
+            return doubled;
+        }
+
         /// <summary>The host changed one of its own CUSTOM loadouts: remember which parts, for the messages when players collide.</summary>
         public static void NoteHostChange(HullInfo hull, int ship, HullConfig before, HullConfig after)
         {
             if (before == null || after == null) return;
-            string who = PhotonNetwork.LocalPlayer != null && !string.IsNullOrEmpty(PhotonNetwork.LocalPlayer.NickName) ? PhotonNetwork.LocalPlayer.NickName : "the host";
-            NoteEditors(hull, ship, LayoutMerge.Changed(before, after, hull.Sockets, RackSlots(hull)), who);
+            Photon.Realtime.Player me = PhotonNetwork.LocalPlayer;
+            string who = me != null && !string.IsNullOrEmpty(me.NickName) ? me.NickName : "the host";
+            NoteEditors(hull, ship, LayoutMerge.Changed(before, after, hull.Sockets, RackSlots(hull)), who, me != null ? me.ActorNumber : 0);
         }
 
         /// <summary>
@@ -768,26 +848,42 @@ namespace VoidCrewShipCustomizer
             return FleetLink.ShipName(ship) + " must be a " + HullName(forced) + " in this match, so it can't use the CUSTOM " + hull.Name + ".";
         }
 
-        /// <summary>Rebuilds what the terminal shows for a ship after its loadout changed.</summary>
+        /// <summary>
+        /// A ship type's CUSTOM loadout changed: what the terminal shows for it is built again the next time it is shown
+        /// (straight away when the terminal shows it now, as the redraw that follows a change shows it).
+        /// </summary>
         public static void Refresh(HullInfo hull)
         {
             Entry entry;
-            if (!ByShip.TryGetValue(hull.ShipGuid, out entry)) return;
+            if (ByShip.TryGetValue(hull.ShipGuid, out entry)) entry.Stale = true;
+        }
+
+        public static void RefreshAll()
+        {
+            foreach (Entry entry in ByShip.Values) entry.Stale = true;
+        }
+
+        /// <summary>
+        /// Called just before the terminal shows a loadout: a CUSTOM one that changed since it was last shown is built
+        /// again (the ship, and the DESCRIPTION text).
+        /// </summary>
+        public static void EnsureBuilt(ShipLoadoutDataDef def)
+        {
+            Entry entry;
+            if (def == null || !ByGuid.TryGetValue(def.AssetGuid, out entry) || !entry.Stale) return;
+            HullInfo hull = entry.Hull;
             try
             {
                 HullConfig config = ConfigToShow(hull);
                 entry.Data.ShipLoadout = Build(hull, config);
                 if (BodyTextField != null) BodyTextField.SetValue(entry.Def.LoadoutContextInfo, new DefaultableLocalizedString(Description(hull, config), null));
+                // Only once it worked: a build that failed is tried again the next time it is shown.
+                entry.Stale = false;
             }
             catch (Exception e)
             {
-                Log.Failure("Rebuilding the CUSTOM loadout of the " + hull.Name, e);
+                Log.Failure("Building the CUSTOM loadout of the " + hull.Name, e);
             }
-        }
-
-        public static void RefreshAll()
-        {
-            foreach (Entry entry in ByShip.Values) Refresh(entry.Hull);
         }
 
         // ---------------------------------------------------------------- building the ship
@@ -799,10 +895,18 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         public static ShipLoadout Build(HullInfo hull, HullConfig config)
         {
-            ShipLoadout loadout = ShipLoadout.FromJObject(hull.BasePreset.Asset.ShipLoadout.AsJObject());
+            JObject baseJson;
+            if (!BaseLoadouts.TryGetValue(hull.ShipGuid, out baseJson))
+            {
+                baseJson = hull.BasePreset.Asset.ShipLoadout.AsJObject();
+                BaseLoadouts[hull.ShipGuid] = baseJson;
+            }
+            // The game's FromJObject only reads the JSON, so the stand-in's is made once per ship type.
+            ShipLoadout loadout = ShipLoadout.FromJObject(baseJson);
 
             loadout.Sockets = new List<ShipSocketEntry>();
             var filled = new HashSet<int>();
+            var singles = new HashSet<Type>();
             foreach (KeyValuePair<int, string> slot in config.Slots)
             {
                 if (slot.Key < 0 || slot.Key >= hull.Sockets.Count) continue;
@@ -815,6 +919,11 @@ namespace VoidCrewShipCustomizer
                 if (!Catalog.TryGetHardpointOption(slot.Value, out option) || !Catalog.CanSpawn(option.PrefabGuid))
                 {
                     Log.WarnOnce("unknown " + slot.Value, "The CUSTOM " + hull.Name + " has a module the game no longer has (" + slot.Value + "); that hardpoint is left empty.");
+                    continue;
+                }
+                if (option.SingleInstance && option.ModuleType != null && !singles.Add(option.ModuleType))
+                {
+                    Log.WarnOnce("single " + hull.ShipGuid + slot.Key, "The CUSTOM " + hull.Name + " has a second " + RichText.Plain(option.Name) + " (one per ship), so hardpoint position " + slot.Key + " is left empty.");
                     continue;
                 }
                 ShipSocketEntry entry = SocketEntryFor(option, slot.Key, config.Contents != null && config.Contents.ContainsKey(slot.Key));
@@ -941,6 +1050,8 @@ namespace VoidCrewShipCustomizer
             if (!ByShip.TryGetValue(ActiveShip, out entry) || entry.Hull.BasePreset == null) return false;
             if (selected.AssetGuid != entry.Hull.BasePreset.AssetGuid) return false;
             custom = entry.Def;
+            // The room's choice is shown around the hub too (not only on the terminal), so it is always built.
+            if (entry.Stale) EnsureBuilt(custom);
             return true;
         }
 
@@ -1464,6 +1575,9 @@ namespace VoidCrewShipCustomizer
             ResetMissionState();
             _terminalShip = 1;
             PartEditors.Clear();
+            PartEditorActors.Clear();
+            // The terminal is back on ship 1 in the new room: lists made for another ship are done with.
+            TerminalUi.OnTerminalShipChanged();
             LayoutEditors.Clear();
             LastChangeToast.Clear();
             RefreshAll();

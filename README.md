@@ -126,7 +126,7 @@ To remove it, delete the DLL. Your saved CUSTOM loadouts stay in the save folder
 | Rules > AnyItemOnAnyRack | true | Any item goes in any storage rack slot, in the CUSTOM editor and during a CUSTOM run. Turn off to keep each rack's usual rules. |
 | Rules > CopyPresetModuleContents | true | A module that one of the game's loadouts also uses starts with the same contents (loaded ammo crate, power cell). |
 | Rules > ShowQuestItems | false | List quest items in the storage picker. They can confuse mission objectives. |
-| Diagnostics > WriteGameDataReport | true | The first time you open the terminal, write everything the mod found to `ShipCustomizer\game-data.txt` in the save folder. |
+| Diagnostics > WriteGameDataReport | true | After an update of the mod or the game, write everything the mod found to `ShipCustomizer\game-data.txt` in the save folder (when the terminal first loads). |
 | Diagnostics > VerboseLogging | false | Extra detail in the BepInEx log. |
 
 ## Known limits
@@ -204,11 +204,20 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
 - When the mission starts (`GSIngame.TransitionTo`), the host swaps the session's `ToLoadShipData` for a `ShipLoadout`
   built from the CUSTOM choices, and the game's own `ShipLoadout.InitializeShip` spawns it for everyone. Anything the game
   could not spawn is left out with a warning instead of stopping the mission from starting.
-- Progression is paused by skipping `PlayerRewardsCollection.AddItem`, achievements, quest progress, tracked stats
-  (`TrackedMetric`, every `SubmitProgress`) and daily and weekly quests (`Metaquest`) during CUSTOM runs. The room
-  property `SC_RunId` holds the CUSTOM run's session id, so a player who becomes host mid-run keeps it paused and
-  remembers the run, and a flag left behind never pauses a later mission. Every Harmony patch is looked up by name and
-  applied on its own, so a game update turns CUSTOM off instead of breaking the game.
+- Progression is paused by skipping `PlayerRewardsCollection.AddItem` (a run's XP only arrives as reward items),
+  achievements, quest progress, tracked stats (`TrackedMetric`, every `SubmitProgress`) and daily and weekly quests
+  (`Metaquest`) during CUSTOM runs. The room property `SC_RunId` (trusted from hosts on 0.8.0 or newer) holds the CUSTOM
+  run's session id, so a player who becomes host mid-run keeps it paused and remembers the run, and a flag left behind
+  never pauses a later mission. Leaving the room mid-run keeps the pause until the hub or another mission: the game saves
+  a mission's stats while unloading it (`PlayerMetricTracker.OnDisable`), after the room is gone. Every Harmony patch is
+  looked up by name and applied on its own, so a game update turns CUSTOM off instead of breaking the game.
+- A CUSTOM loadout's ship for the terminal is built just before the terminal shows it (a `Display` prefix), and the
+  room's choice when the game asks for it, so loading the hub reads no modules. Remote changes redraw the terminal once
+  per frame at most, and the room's choice is only told around the hub again when ship 1's choice itself changes.
+- Saving: `SafeFile` writes to `.tmp`, flushed to the disk, then replaces the file and keeps the one before as `.bak`. An
+  empty or damaged file is kept as `.broken` and the `.bak` (then the `.tmp`) is read instead. Loadout changes are saved
+  a second after the last one, straight away before a mission and when the game closes. Fields from a newer version are
+  kept (`[JsonExtensionData]`).
 
 ### Public API for other mods
 

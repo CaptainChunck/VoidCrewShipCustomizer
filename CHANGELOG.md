@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.9.1
+
+A full code review, with fixes and speed-ups.
+
+- **Progression in CUSTOM runs (the modding rules):**
+  - Leaving a CUSTOM mission early (quitting to the main menu, following an invite, being disconnected) no longer lets
+    that mission's stats and Steam stats through. The game saves them while it closes the mission, after the room is
+    gone, so the pause now holds until the hub or another mission.
+  - A run flag left behind by an older host can't leave a later CUSTOM run unpaused.
+  - If a game update ever breaks the hub hook that ends a run's pause, CUSTOM is switched off instead of leaving
+    progression paused.
+- **Saving:**
+  - The save files are on the disk before they replace the old ones, so a power cut can't empty them.
+  - A damaged file is kept as `.broken`, and the copy from before the last save is used instead.
+  - Changes are saved a second after the last one (quick picks are saved together), and straight away before a mission
+    and when the game closes.
+  - What a newer version saves is kept when this one saves.
+- **Several players changing one ship:**
+  - A player's change was refused every time when the host's own loadout held something the host's checks would take
+    out (a module a game update removed, or a setting turned off since). Fixed.
+  - A quick second change to the same part is no longer refused as a clash with yourself.
+  - After SAME AS SHIP 1, the next change to that ship works, and a refused change no longer stops a ship following ship
+    1.
+  - Two players fitting the same one-per-ship module at once can't give the ship two.
+  - A refused change to a ship that follows ship 1 now reaches its player.
+- **Speed:**
+  - Loading the hub no longer reads every module and item, which took up to about a second and a half. CUSTOM is built
+    when the terminal first shows it.
+  - Other players' edits redraw the terminal once, not several times. The hub's ship hologram is only rebuilt when the
+    room's choice changes.
+  - The game-data report is only written again after an update of the mod or the game.
+  - Hovering list rows, long item lists and joining a room cost less.
+- **The terminal:**
+  - A message about a refused pick is no longer hidden behind the list that opens again. "Loaded" and "Saved" only show
+    when it worked.
+  - The second click of a double-click no longer picks a row in the window it just opened.
+  - Hover sounds on the hardpoints no longer pile up.
+  - The CLEAR confirmation opens on the CLEAR tab.
+  - A pick from a list made for another ship is refused instead of landing on the wrong ship.
+  - A damaged or made-up share code gives a message instead of nothing.
+  - Several hub messages at once are all shown.
+
 ## 0.9.0
 
 - **Up to 6 CUSTOM ships with Void Crew Fleet 0.4.0**: up to 3 ships in co-op, and up to 3 a team in a Fleet Battle.

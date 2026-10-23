@@ -24,6 +24,7 @@ namespace VoidCrewShipCustomizer
         private sealed class SlotHook
         {
             public Clickable Click;
+            public EventCallback<PointerEnterEvent> Sound;
             public EventCallback<PointerEnterEvent> Enter;
             public EventCallback<PointerLeaveEvent> Leave;
             public PickingMode OriginalPicking;
@@ -55,6 +56,8 @@ namespace VoidCrewShipCustomizer
         private static Label _toastLabel;
         private static int _toastVersion;
         private static bool _reportWritten;
+        /// <summary>A redraw is asked for and comes on the next frame (see <see cref="RequestRedisplay"/>).</summary>
+        private static bool _redisplayAsked;
 
         // ---------------------------------------------------------------- hooks called from Patches
 
@@ -115,6 +118,7 @@ namespace VoidCrewShipCustomizer
             _shownHull = null;
             _toolbar = null;
             _toast = null;
+            _redisplayAsked = false;
             Hooks.Clear();
             CustomLoadouts.ResetTerminalShip();
         }
@@ -123,8 +127,30 @@ namespace VoidCrewShipCustomizer
         public static void OnTerminalShipChanged()
         {
             CloseOverlays();
-            if (_shownHull != null) Redisplay();
+            if (_shownHull != null) RequestRedisplay();
             else UpdateToolbar();
+        }
+
+        /// <summary>
+        /// Draws the terminal again once, on the next frame, however many changes ask for it at once: each draw runs the
+        /// game's whole Display, which makes every module icon again (and the open storage window is refreshed by it).
+        /// </summary>
+        private static void RequestRedisplay()
+        {
+            if (_redisplayAsked || _root == null || _shownHull == null) return;
+            _redisplayAsked = true;
+            _root.schedule.Execute(() =>
+            {
+                _redisplayAsked = false;
+                try
+                {
+                    if (_shownHull != null) Redisplay();
+                }
+                catch (Exception e)
+                {
+                    Log.Failure("Refreshing the loadout terminal", e);
+                }
+            });
         }
 
         /// <summary>The player stepped away from the terminal.</summary>
@@ -147,30 +173,22 @@ namespace VoidCrewShipCustomizer
         /// <summary>A CUSTOM loadout changed on another player's terminal (or the host changed): redraw what shows it.</summary>
         public static void OnLoadoutChangedRemotely()
         {
-            try
-            {
-                if (_shownHull != null) Redisplay();
-                if (_storage != null && _storage.IsOpen) _storage.Refresh();
-            }
-            catch (Exception e)
-            {
-                Log.Failure("Refreshing the loadout terminal", e);
-            }
+            RequestRedisplay();
         }
 
-        /// <summary>The host's CUSTOM choice changed (seen through the room); redraw what depends on it.</summary>
+        /// <summary>The host's CUSTOM choice for ship 1 changed (seen through the room); redraw what depends on it.</summary>
         public static void OnSelectionChangedRemotely()
         {
             try
             {
                 HubShipManager manager = HubShipManager.Instance;
                 if (manager != null) manager.NotifyShipSelected(manager.SelectedShipGuid.AsIntArray());
-                if (_shownHull != null) Redisplay();
             }
             catch (Exception e)
             {
-                Log.Failure("Refreshing the loadout terminal", e);
+                Log.Failure("Showing the room's choice", e);
             }
+            RequestRedisplay();
         }
 
         // ---------------------------------------------------------------- the hardpoints on the ship picture
@@ -250,7 +268,8 @@ namespace VoidCrewShipCustomizer
             if (Hooks.ContainsKey(slot)) return;
             var hook = new SlotHook { OriginalPicking = slot.pickingMode };
             slot.pickingMode = PickingMode.Position;
-            hook.Click = Ui.Click(slot, () => OnSlotClicked(index));
+            hook.Click = Ui.ClickOnly(slot, () => OnSlotClicked(_shownHull, index, false));
+            hook.Sound = Ui.HoverSound(slot, "list");
             hook.Enter = e => slot.style.scale = new Scale(new Vector3(1.2f, 1.2f, 1f));
             hook.Leave = e => slot.style.scale = new Scale(Vector3.one);
             slot.RegisterCallback(hook.Enter);
@@ -263,6 +282,7 @@ namespace VoidCrewShipCustomizer
             SlotHook hook;
             if (!Hooks.TryGetValue(slot, out hook)) return;
             slot.RemoveManipulator(hook.Click);
+            slot.UnregisterCallback(hook.Sound);
             slot.UnregisterCallback(hook.Enter);
             slot.UnregisterCallback(hook.Leave);
             slot.pickingMode = hook.OriginalPicking;
@@ -270,16 +290,11 @@ namespace VoidCrewShipCustomizer
             Hooks.Remove(slot);
         }
 
-        private static void OnSlotClicked(int index)
-        {
-            OnSlotClicked(index, false);
-        }
-
+        /// <param name="hull">The ship type the click was meant for: the shown one for the ship picture, or the one a list was made for.</param>
         /// <param name="fromList">Opened from the HARDPOINTS list: a pick goes back to the list, where it was.</param>
-        private static void OnSlotClicked(int index, bool fromList)
+        private static void OnSlotClicked(HullInfo hull, int index, bool fromList)
         {
-            HullInfo hull = _shownHull;
-            if (hull == null || index < 0 || index >= hull.Sockets.Count) return;
+            if (hull == null || hull != _shownHull || index < 0 || index >= hull.Sockets.Count) return;
             if (!CustomLoadouts.CanEdit(hull))
             {
                 Toast(CustomLoadouts.WhyNotEditable());
@@ -778,7 +793,7 @@ namespace VoidCrewShipCustomizer
             if (issue.Hardpoint >= 0 && issue.Hardpoint < hull.Sockets.Count)
             {
                 if (issue.Where.EndsWith("LOADED")) OpenContentsPicker(hull, hull.Sockets[issue.Hardpoint]);
-                else OnSlotClicked(issue.Hardpoint);
+                else OnSlotClicked(hull, issue.Hardpoint, false);
                 return;
             }
             ShelfInfo shelf = hull.Shelves.FirstOrDefault(s => s.CoreIndex == issue.Rack);
@@ -877,7 +892,7 @@ namespace VoidCrewShipCustomizer
                     TooltipGuid = option != null ? option.Guid : GUIDUnion.Empty(),
                     // Someone who may only look gets a list to read, not buttons that lead nowhere.
                     Info = !editable,
-                    OnPick = () => OnSlotClicked(chosen.Index, true)
+                    OnPick = () => OnSlotClicked(hull, chosen.Index, true)
                 });
             }
             OpenPicker("HARDPOINTS · " + hull.Name.ToUpperInvariant(),
@@ -1049,7 +1064,7 @@ namespace VoidCrewShipCustomizer
         /// Saves the CUSTOM loadout the terminal shows in one of this player's numbered slots for this ship type, to load
         /// again in a later match. Slots replace what they held (marked REPLACE); the CLEAR tab empties one.
         /// </summary>
-        private static void OpenSavePicker(HullInfo hull)
+        private static void OpenSavePicker(HullInfo hull, string tab = "SAVE")
         {
             var entries = new List<PickerPanel.Entry>();
             for (int slot = 1; slot <= SavedLoadouts.SlotCount; slot++)
@@ -1091,7 +1106,7 @@ namespace VoidCrewShipCustomizer
                     {
                         if (!Confirmed(chosen, "clear"))
                         {
-                            OpenSavePicker(hull);
+                            OpenSavePicker(hull, "CLEAR");
                             if (_picker != null) _picker.ScrollTo(new Vector2(0f, 0f));
                             return;
                         }
@@ -1110,7 +1125,7 @@ namespace VoidCrewShipCustomizer
             });
             OpenPicker("SAVE LOADOUT · " + hull.Name.ToUpperInvariant(),
                 "Keep this CUSTOM loadout on your PC, then bring it back in any later match with LOAD LOADOUT (on a " + hull.Name + "), or share it as a code.",
-                entries, "SAVE");
+                entries, tab);
         }
 
         /// <summary>Puts the shown CUSTOM loadout on the clipboard as a share code.</summary>
@@ -1142,12 +1157,14 @@ namespace VoidCrewShipCustomizer
             }
             if (hullHex != hull.ShipGuid.AsHex())
             {
+                var otherGuid = new GUIDUnion(hullHex);
                 HullInfo other;
-                Toast("That share code is for " + (Catalog.TryGetHull(new GUIDUnion(hullHex), out other) ? "the " + other.Name : "another ship") + ": pick that ship first.");
+                bool known = Catalog.ShipGuids().Contains(otherGuid) && Catalog.TryGetHull(otherGuid, out other);
+                Toast("That share code is for " + (known ? "the " + CustomLoadouts.HullName(otherGuid) + ": pick that ship first." : "a ship this game doesn't have."));
                 return;
             }
             HullConfig clean = CustomLoadouts.Sanitize(hull, shared);
-            Edit(hull, c => CopyInto(c, clean.Clone(), storageOnly, "a share code"));
+            if (!Edit(hull, c => CopyInto(c, clean.Clone(), storageOnly, "a share code"))) return;
             Toast(storageOnly ? "Loaded the storage racks of the share code." : "Loaded the share code: " + CustomLoadouts.Summary(clean) + ".");
         }
 
@@ -1179,7 +1196,11 @@ namespace VoidCrewShipCustomizer
         private static void SaveToSlot(HullInfo hull, int slot)
         {
             HullConfig config = CustomLoadouts.ConfigToShow(hull);
-            SavedLoadouts.Save(hull, slot, config);
+            if (!SavedLoadouts.Save(hull, slot, config))
+            {
+                Toast("Not saved: your saved loadouts file couldn't be read when the game started (see the BepInEx log).");
+                return;
+            }
             Toast("Saved to slot " + slot + ": " + CustomLoadouts.Summary(config) + ".");
         }
 
@@ -1371,6 +1392,7 @@ namespace VoidCrewShipCustomizer
                     if (action == "empty") Edit(hull, EmptyStorage);
                     else if (action == "copy") OpenLoadPicker(hull, true);
                 });
+            KeepToastOnTop();
         }
 
         /// <summary>Whether a storage item breaks this match's rules (always false outside a Fleet Battle).</summary>
@@ -1475,15 +1497,21 @@ namespace VoidCrewShipCustomizer
         /// if one of them changed while the list was open (another player got there first), nothing is changed and the
         /// player is told, so neither pick silently replaces the other.
         /// </summary>
-        private static void Edit(HullInfo hull, Action<HullConfig> change, params string[] parts)
+        private static bool Edit(HullInfo hull, Action<HullConfig> change, params string[] parts)
         {
             if (!CustomLoadouts.CanEdit(hull))
             {
                 Toast(CustomLoadouts.WhyNotEditable());
-                return;
+                return false;
             }
             int ship = CustomLoadouts.TerminalShip;
-            if (parts.Length > 0 && _pickerSeen != null && _pickerSeenHull == hull.ShipGuid && _pickerSeenShip == ship)
+            if (_pickerSeen != null && (_pickerSeenHull != hull.ShipGuid || _pickerSeenShip != ship))
+            {
+                // The terminal moved to another ship while the list was open (its lists are closed a moment later).
+                Toast("The terminal switched to another ship while this list was open, so your pick wasn't made. Pick again.");
+                return false;
+            }
+            if (parts.Length > 0 && _pickerSeen != null)
             {
                 HullConfig now = CustomLoadouts.ConfigToShow(hull);
                 string moved = parts.FirstOrDefault(p => LayoutMerge.StateOf(_pickerSeen, hull.Sockets, p) != LayoutMerge.StateOf(now, hull.Sockets, p));
@@ -1492,14 +1520,18 @@ namespace VoidCrewShipCustomizer
                     Toast(CustomLoadouts.LastEditorOf(hull, moved) + " changed " + CustomLoadouts.PartName(hull, moved) +
                           " while this list was open, so your pick wasn't made. Have a look and pick again.");
                     if (_storage != null && _storage.IsOpen) _storage.Refresh();
-                    return;
+                    return false;
                 }
             }
             if (CustomLoadouts.EditsGoToHost(hull))
             {
                 HullConfig shared = CustomLoadouts.ConfigToShow(hull).Clone();
                 change(shared);
-                if (!CustomLoadouts.SendEditToHost(hull, ship, shared, false)) Toast("Your change could not be sent to the host. Try again in a moment.");
+                if (!CustomLoadouts.SendEditToHost(hull, ship, shared, false))
+                {
+                    Toast("Your change could not be sent to the host. Try again in a moment.");
+                    return false;
+                }
             }
             else
             {
@@ -1511,8 +1543,9 @@ namespace VoidCrewShipCustomizer
                 CustomLoadouts.NoteHostChange(hull, ship, before, config);
                 CustomLoadouts.OnEdited(hull, 0, 0, ship);
             }
+            // The redraw refreshes an open storage window too.
             Redisplay();
-            if (_storage != null && _storage.IsOpen) _storage.Refresh();
+            return true;
         }
 
         /// <summary>Ship 2 to 6 goes back to using ship 1's CUSTOM loadout.</summary>
@@ -1531,11 +1564,11 @@ namespace VoidCrewShipCustomizer
             }
             else
             {
-                LoadoutStore.Forget(hull, ship);
+                CustomLoadouts.FollowShip1AsHost(hull, ship);
                 CustomLoadouts.OnEdited(hull, 0, 0, ship);
             }
+            // The redraw refreshes an open storage window too.
             Redisplay();
-            if (_storage != null && _storage.IsOpen) _storage.Refresh();
         }
 
         /// <summary>
@@ -1595,6 +1628,7 @@ namespace VoidCrewShipCustomizer
             _pickerSeenHull = _shownHull != null ? _shownHull.ShipGuid : GUIDUnion.Empty();
             _pickerSeenShip = CustomLoadouts.TerminalShip;
             _picker = new PickerPanel(host, title, subtitle, entries, tab, TeamColor());
+            KeepToastOnTop();
         }
 
         private static void CloseOverlays()
@@ -1603,6 +1637,13 @@ namespace VoidCrewShipCustomizer
             if (_storage != null) _storage.Close();
             _picker = null;
             _storage = null;
+            _pickerSeen = null;
+        }
+
+        /// <summary>A message shown just before a window opened (a refused pick, say) stays readable above it.</summary>
+        private static void KeepToastOnTop()
+        {
+            if (_toast != null && _toast.parent != null) _toast.BringToFront();
         }
 
         private static VisualElement OverlayHost()
@@ -1658,6 +1699,8 @@ namespace VoidCrewShipCustomizer
         {
             if (_reportWritten || Settings.WriteGameDataReport == null || !Settings.WriteGameDataReport.Value) return;
             _reportWritten = true;
+            // Only after an update of the mod or the game: otherwise it would say the same again.
+            if (GameDataReport.UpToDate()) return;
             VisualElement root = OverlayHost();
             // Wait a moment so the terminal's layout has been calculated for the screen-layout part of the report.
             if (root != null) root.schedule.Execute(() => GameDataReport.Write(root)).ExecuteLater(1500);

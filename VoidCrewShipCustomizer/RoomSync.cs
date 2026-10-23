@@ -175,6 +175,8 @@ namespace VoidCrewShipCustomizer
         // The host: the room it shares its CUSTOM loadouts with, and the changes it has read, by player and property.
         private static string _sharedRoom;
         private static readonly Dictionary<string, string> SeenEdits = new Dictionary<string, string>();
+        /// <summary>Ship types whose loadouts are still to be shared with the room (see <see cref="SendNextShare"/>).</summary>
+        private static readonly Queue<GUIDUnion> SharesToSend = new Queue<GUIDUnion>();
         private static readonly Dictionary<string, int> AppliedEdits = new Dictionary<string, int>();
 
         // Other players: the host's shared loadouts as last read, and the number of this player's latest change to each.
@@ -321,9 +323,10 @@ namespace VoidCrewShipCustomizer
                 if (s >= 2 && !FleetLink.Running) break;
                 HullConfig layout = s == 1 || LoadoutStore.HasOwn(hull, s) ? LoadoutStore.Get(hull, s) : null;
                 List<string> refusedHere = s == ship && refused != null && refused.Count > 0 ? refused : null;
-                // A ship that follows ship 1 has no layout to share, but a refused change must still reach its player: then
-                // the layout is shared empty, with the refusal (the player's terminal goes back to following ship 1).
-                properties[LayoutKey(s, hull.ShipGuid)] = layout != null || refusedHere != null ? LayoutJson(layout, by, n, refusedHere) : null;
+                // A ship that follows ship 1 has no layout to share, but the answer to a player's change must still reach
+                // them: then the layout is shared empty, with the change's number and any refusal (their terminal stops
+                // showing the change it sent and follows ship 1 again).
+                properties[LayoutKey(s, hull.ShipGuid)] = layout != null || (s == ship && by != 0) ? LayoutJson(layout, by, n, refusedHere) : null;
             }
             if (properties.Count > 0) Set(properties);
         }
@@ -348,12 +351,20 @@ namespace VoidCrewShipCustomizer
             }
             if (!someoneCanEdit) return;
             _sharedRoom = room;
-            foreach (GUIDUnion guid in Catalog.ShipGuids())
-            {
-                HullInfo hull;
-                if (Catalog.TryGetHull(guid, out hull)) PublishLayouts(hull, 0, 0);
-            }
+            SharesToSend.Clear();
+            foreach (GUIDUnion guid in Catalog.ShipGuids()) SharesToSend.Enqueue(guid);
             Log.Info("Other players with Ship Customizer can now choose and change your CUSTOM loadouts; their changes are saved on your PC.");
+        }
+
+        /// <summary>
+        /// Host: shares the next ship type's loadouts, one per poll, so reading each ship (the first time) is spread out
+        /// instead of stalling one frame.
+        /// </summary>
+        private static void SendNextShare()
+        {
+            if (SharesToSend.Count == 0 || !SharingLayouts) return;
+            HullInfo hull;
+            if (Catalog.TryGetHull(SharesToSend.Dequeue(), out hull)) PublishLayouts(hull, 0, 0);
         }
 
         /// <summary>Host: reads the players' latest changes and saves the new ones, in the order each player made them.</summary>
@@ -451,9 +462,26 @@ namespace VoidCrewShipCustomizer
             }
         }
 
+        /// <summary>This player's change to one of the host's loadouts (named like its room property) is done with.</summary>
+        private static void ClearOwnEdit(string layoutKey)
+        {
+            SentEdits.Remove(layoutKey);
+            Photon.Realtime.Player me = PhotonNetwork.LocalPlayer;
+            if (me == null) return;
+            try
+            {
+                me.SetCustomProperties(new Hashtable { { EditKeyStart + layoutKey.Substring(LayoutKeyStart.Length), null } });
+            }
+            catch (Exception e)
+            {
+                Log.Verbose("Could not clear your answered CUSTOM change: " + e.Message);
+            }
+        }
+
         private static void ForgetShared()
         {
             _sharedRoom = null;
+            SharesToSend.Clear();
             SeenEdits.Clear();
             AppliedEdits.Clear();
             SeenLayouts.Clear();
@@ -513,7 +541,12 @@ namespace VoidCrewShipCustomizer
                     CustomLoadouts.SetConfirmedLayout(ship, hullGuid, layout != null ? layout.Config : null);
                     int sent;
                     bool mine = layout != null && layout.By == me;
-                    if (mine && SentEdits.TryGetValue(key, out sent) && layout.N < sent) continue;
+                    if (mine && SentEdits.TryGetValue(key, out sent))
+                    {
+                        if (layout.N < sent) continue;
+                        // The host has answered this player's latest change here: it needn't be sent to everyone who joins.
+                        ClearOwnEdit(key);
+                    }
                     CustomLoadouts.SetHostLayout(ship, hullGuid, layout != null ? layout.Config : null);
                     changed = true;
                     if (layout == null) continue;
@@ -532,6 +565,8 @@ namespace VoidCrewShipCustomizer
                 int ship;
                 GUIDUnion hullGuid;
                 if (!TryParseLayoutKey(key, out ship, out hullGuid)) continue;
+                // Gone from the room (the ship follows ship 1 again): the next change is measured against that.
+                CustomLoadouts.SetConfirmedLayout(ship, hullGuid, null);
                 CustomLoadouts.SetHostLayout(ship, hullGuid, null);
                 changed = true;
             }
@@ -636,6 +671,16 @@ namespace VoidCrewShipCustomizer
         {
             if (!PhotonNetwork.InRoom || PhotonNetwork.IsMasterClient) return false;
             return ProtocolOf(PhotonNetwork.MasterClient) >= SharedProtocol;
+        }
+
+        /// <summary>From this host protocol on (0.8.0), the host writes and clears <see cref="RunIdKey"/>.</summary>
+        public const int RunIdProtocol = 3;
+
+        /// <summary>The host's protocol (0 without the mod, or outside a room); the host itself is always on this version's.</summary>
+        public static int HostProtocol()
+        {
+            if (!PhotonNetwork.InRoom) return 0;
+            return PhotonNetwork.IsMasterClient ? Protocol : ProtocolOf(PhotonNetwork.MasterClient);
         }
 
         /// <summary>A player's protocol from their "I have the Ship Customizer" property; 0 without the mod.</summary>
@@ -777,6 +822,7 @@ namespace VoidCrewShipCustomizer
             if (host)
             {
                 ShareLayoutsWhenNeeded(room);
+                SendNextShare();
                 ApplyEdits(room);
                 EnforceEveryoneHasMod();
                 return;
@@ -833,6 +879,8 @@ namespace VoidCrewShipCustomizer
                 return;
             }
             string who = string.Join(", ", missing.ToArray());
+            // One message with every line: each new message replaces the one before.
+            var notices = new List<string>();
 
             if (CustomLoadouts.IsActive)
             {
@@ -845,18 +893,19 @@ namespace VoidCrewShipCustomizer
                 {
                     CustomLoadouts.DeactivateAsHost();
                 }
-                PublishNotice("CUSTOM was switched off: " + who + " joined without Ship Customizer. Everyone needs it for CUSTOM.", true);
+                notices.Add("CUSTOM was switched off: " + who + " joined without Ship Customizer. Everyone needs it for CUSTOM.");
             }
             if (otherShips.Count > 0)
             {
                 CancelShips(otherShips);
-                PublishNotice("CUSTOM was switched off on " + ShipNames(otherShips) + ": " + who + " joined without Ship Customizer.", true);
+                notices.Add("CUSTOM was switched off on " + ShipNames(otherShips) + ": " + who + " joined without Ship Customizer.");
             }
             if (SavedCustomRunSelected() && HubQuestManager.Instance != null)
             {
                 HubQuestManager.Instance.SelectQuest(GUIDUnion.Empty());
-                PublishNotice("The saved CUSTOM run was unselected: " + who + " joined without Ship Customizer.", true);
+                notices.Add("The saved CUSTOM run was unselected: " + who + " joined without Ship Customizer.");
             }
+            if (notices.Count > 0) PublishNotice(string.Join("\n", notices.ToArray()), true);
         }
 
         /// <summary>Host: Void Crew Fleet's ships lose their CUSTOM loadout (Fleet gives them CUSTOM's stand-in).</summary>
@@ -890,32 +939,53 @@ namespace VoidCrewShipCustomizer
             }
         }
 
+        /// <summary>
+        /// Other players: a ship's CUSTOM choice as the host shares it. The host shares it again with every change to that
+        /// loadout, so when only the loadout changed, only that ship type is drawn again; the room's choice is only told
+        /// around the hub again (which rebuilds the hub's ship hologram) when ship 1's choice itself changed.
+        /// </summary>
         private static void ApplyHostCustom(string json, int ship)
         {
-            CustomLoadouts.SetRemoteChoice(ship, GUIDUnion.Empty(), null);
+            GUIDUnion before = CustomLoadouts.ActiveShipOf(ship);
+            GUIDUnion hullGuid = GUIDUnion.Empty();
+            HullConfig config = null;
+            HullInfo hull = null;
             if (!string.IsNullOrEmpty(json))
             {
                 try
                 {
                     var custom = JsonConvert.DeserializeObject<RoomCustom>(json);
-                    var hullGuid = new GUIDUnion(custom.Ship);
-                    HullInfo hull;
+                    var guid = new GUIDUnion(custom.Ship);
                     ShipLoadoutDataDef def;
                     // Only the game's ships: a made-up GUID must not make the catalog try to read a ship that isn't there.
-                    if (Catalog.ShipGuids().Contains(hullGuid) && Catalog.TryGetHull(hullGuid, out hull) && CustomLoadouts.TryGetDef(hullGuid, out def))
+                    if (Catalog.ShipGuids().Contains(guid) && Catalog.TryGetHull(guid, out hull) && CustomLoadouts.TryGetDef(guid, out def))
                     {
-                        HullConfig config = custom.Config ?? new HullConfig();
-                        CustomLoadouts.SetRemoteChoice(ship, hullGuid, config);
-                        Log.Info("The host chose a CUSTOM " + hull.Name + (ship >= 2 ? " for " + FleetLink.ShipName(ship) : "") + ": " + CustomLoadouts.Describe(config) + ".");
+                        hullGuid = guid;
+                        config = custom.Config ?? new HullConfig();
+                    }
+                    else
+                    {
+                        hull = null;
                     }
                 }
                 catch (Exception e)
                 {
+                    hull = null;
                     Log.Failure("Reading the host's CUSTOM loadout", e);
                 }
             }
-            CustomLoadouts.RefreshAll();
-            TerminalUi.OnSelectionChangedRemotely();
+            CustomLoadouts.SetRemoteChoice(ship, hullGuid, config);
+            if (hull != null) CustomLoadouts.Refresh(hull);
+            if (hullGuid == before)
+            {
+                TerminalUi.OnLoadoutChangedRemotely();
+                return;
+            }
+            HullInfo previous;
+            if (!before.IsNull && Catalog.TryGetHull(before, out previous)) CustomLoadouts.Refresh(previous);
+            if (hull != null) Log.Info("The host chose a CUSTOM " + hull.Name + (ship >= 2 ? " for " + FleetLink.ShipName(ship) : "") + ": " + CustomLoadouts.Describe(config) + ".");
+            if (ship == 1) TerminalUi.OnSelectionChangedRemotely();
+            else TerminalUi.OnLoadoutChangedRemotely();
         }
     }
 }

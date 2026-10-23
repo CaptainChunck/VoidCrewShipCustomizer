@@ -20,14 +20,47 @@ namespace VoidCrewShipCustomizer
     {
         private const int MaxLayoutLines = 600;
 
+        private static string ReportPath
+        {
+            get { return Path.Combine(LoadoutStore.Folder, "game-data.txt"); }
+        }
+
+        private static string FirstLine
+        {
+            get { return Plugin.Name + " " + Plugin.Version + " game-data report"; }
+        }
+
+        private static string Versions
+        {
+            get { return "| game " + Application.version + " | Unity " + Application.unityVersion; }
+        }
+
+        /// <summary>
+        /// Whether the report there was written by this version of the mod for this version of the game: then it would say
+        /// the same again, and writing it (reading every ship and item) would only cost a moment as the hub loads.
+        /// </summary>
+        public static bool UpToDate()
+        {
+            try
+            {
+                if (!File.Exists(ReportPath)) return false;
+                List<string> head = File.ReadLines(ReportPath).Take(2).ToList();
+                return head.Count == 2 && head[0] == FirstLine && head[1].EndsWith(Versions, StringComparison.Ordinal);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         public static void Write(VisualElement terminalRoot)
         {
-            string path = Path.Combine(LoadoutStore.Folder, "game-data.txt");
+            string path = ReportPath;
             try
             {
                 var text = new StringBuilder();
-                text.AppendLine(Plugin.Name + " " + Plugin.Version + " game-data report");
-                text.AppendLine("Written " + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + " | game " + Application.version + " | Unity " + Application.unityVersion);
+                text.AppendLine(FirstLine);
+                text.AppendLine("Written " + DateTime.Now.ToString("yyyy-MM-dd HH:mm") + " " + Versions);
                 text.AppendLine();
 
                 text.AppendLine("== SHIPS ==");

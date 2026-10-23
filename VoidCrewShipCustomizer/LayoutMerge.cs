@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -81,31 +82,38 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>
-        /// A player's change merged into the loadout as it is now: <paramref name="seen"/> is the loadout as the player last
-        /// saw it, <paramref name="wanted"/> the same with their change. Parts the player didn't change keep their current
-        /// state; parts they changed take their new state, unless someone changed that part after the player saw it, in
-        /// which case it is refused and keeps the other change. CopiedFrom (a note only) follows the player's change.
+        /// A player's change merged into the loadout as it is now.
+        /// - <paramref name="seen"/> is the loadout as the player last saw it from the host, <paramref name="wanted"/> the
+        ///   same with their change, both as they were sent: which parts the player changed, and which changed since they
+        ///   looked, are told from those (the host's own loadout as it was shared, so whatever the host's checks would take
+        ///   out of it never reads as a change).
+        /// - <paramref name="apply"/> is <paramref name="wanted"/> after the host's checks: a changed part takes its state
+        ///   from it.
+        /// - A part that changed since the player looked is refused and keeps the other change, unless
+        ///   <paramref name="ownChange"/> says that latest change was this same player's (an earlier change of theirs that
+        ///   hasn't come back to them yet).
+        /// Parts the player didn't change keep their current state. CopiedFrom (a note only) follows the player's change.
         /// </summary>
-        public static HullConfig Merge(HullConfig current, HullConfig seen, HullConfig wanted, IList<SocketInfo> sockets, IDictionary<int, int> rackSlots,
-                                       List<string> applied, List<string> refused)
+        public static HullConfig Merge(HullConfig current, HullConfig seen, HullConfig wanted, HullConfig apply, IList<SocketInfo> sockets, IDictionary<int, int> rackSlots,
+                                       Func<string, bool> ownChange, List<string> applied, List<string> refused)
         {
             HullConfig result = current.Clone().Normalized();
             foreach (string part in Parts(sockets, rackSlots))
             {
                 string before = StateOf(seen, sockets, part);
-                string after = StateOf(wanted, sockets, part);
-                if (before == after) continue;
+                if (before == StateOf(wanted, sockets, part)) continue;
+                string after = StateOf(apply, sockets, part);
                 string now = StateOf(current, sockets, part);
                 if (now == after) continue;
-                if (now != before)
+                if (now != before && (ownChange == null || !ownChange(part)))
                 {
                     refused.Add(part);
                     continue;
                 }
-                Copy(wanted, result, sockets, part);
+                Copy(apply, result, sockets, part);
                 applied.Add(part);
             }
-            if ((seen.CopiedFrom ?? "") != (wanted.CopiedFrom ?? "")) result.CopiedFrom = wanted.CopiedFrom ?? "";
+            if ((seen.CopiedFrom ?? "") != (wanted.CopiedFrom ?? "")) result.CopiedFrom = apply.CopiedFrom ?? "";
             return result;
         }
 

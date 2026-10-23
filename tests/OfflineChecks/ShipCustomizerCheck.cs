@@ -118,9 +118,51 @@ internal static class Program
         Field("CG.Client.Utils.CsObjectReference", "type", null);
         Field("CG.Client.Utils.CsObjectReference", "orbitObjectRef", null);
 
+        // NotifyShipSelected is replaced outright by a prefix (it never runs), so a game update that changes it must be looked
+        // at: its body's fingerprint is pinned here.
+        Console.WriteLine("Game methods this plugin replaces outright:");
+        BodyUnchanged("HubShipManager", "NotifyShipSelected", NotifyShipSelectedBody);
+
         Console.WriteLine("Types found by name:");
         TypeDefinition fabricator = _game.GetType("CG.Ship.Modules.FabricatorModule");
         Check(fabricator != null, "CG.Ship.Modules.FabricatorModule exists (a Fleet Battle never allows extra Fabricator modules)");
+    }
+
+    /// <summary>HubShipManager.NotifyShipSelected's body as of game 1.3.0 (see BodyFingerprint).</summary>
+    private const string NotifyShipSelectedBody = "af92646d5b894625";
+
+    private static void BodyUnchanged(string typeName, string methodName, string expected)
+    {
+        TypeDefinition type = Type(typeName);
+        MethodDefinition method = type != null ? type.Methods.FirstOrDefault(m => m.Name == methodName && m.HasBody) : null;
+        if (method == null)
+        {
+            Check(false, typeName + "." + methodName + " has a body to check");
+            return;
+        }
+        string actual = BodyFingerprint(method);
+        Check(actual == expected, typeName + "." + methodName + " is unchanged since the plugin replaced it" +
+                                  (actual == expected ? "" : " (fingerprint " + actual + "; compare the game's new version with Patches.NotifyShipSelectedPrefix, then pin it)"));
+    }
+
+    /// <summary>The method's instructions (op codes and what they refer to) hashed: changes with any change to its code.</summary>
+    private static string BodyFingerprint(MethodDefinition method)
+    {
+        var text = new System.Text.StringBuilder();
+        foreach (Mono.Cecil.Cil.Instruction instruction in method.Body.Instructions)
+        {
+            text.Append(instruction.OpCode.Name);
+            object operand = instruction.Operand;
+            if (operand is MemberReference) text.Append(' ').Append(((MemberReference)operand).FullName);
+            else if (operand is Mono.Cecil.Cil.Instruction) text.Append(" @").Append(((Mono.Cecil.Cil.Instruction)operand).Offset);
+            else if (operand != null) text.Append(' ').Append(operand);
+            text.Append('\n');
+        }
+        using (var sha = System.Security.Cryptography.SHA256.Create())
+        {
+            byte[] hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(text.ToString()));
+            return BitConverter.ToString(hash, 0, 8).Replace("-", "").ToLowerInvariant();
+        }
     }
 
     private static TypeDefinition Type(string fullName)
@@ -379,6 +421,10 @@ internal static class Program
         Check(moreBack.Count == 1 && moreBack.Contains("5") && ((IDictionary)moreBack["5"]).Contains("4bc2ff9e1d156c94a9c94286a7aaa79b"),
             "ships 3 to 6's own layouts survive a save and load");
         Check(store.GetField("MoreShips").GetValue(old) is IDictionary, "a 0.8.0 save file loads, with no layouts for ships 3 to 6");
+        // 0.9.1: fields from a newer version (here at the top and in a loadout) survive a load and save.
+        object newer = deserialize.Invoke(null, new object[] { "{\"Version\":1,\"Ships\":{\"4bc2ff9e1d156c94a9c94286a7aaa79b\":{\"Slots\":{},\"Paint\":\"red\"}},\"Future\":[1,2]}", store });
+        string savedNewer = (string)serialize.Invoke(null, new[] { newer });
+        Check(savedNewer.Contains("\"Future\":[1,2]") && savedNewer.Contains("\"Paint\":\"red\""), "what a newer version saved is kept when this one saves");
 
         // 0.5.0: the fabricator's starting alloys and level. Older files (and older versions on other PCs) leave them out.
         Check((int)config.GetField("Alloys").GetValue(copy) == -1 && (int)config.GetField("FabricatorLevel").GetValue(copy) == 0,
@@ -680,8 +726,10 @@ internal static class Program
         Func<object, IDictionary> slotsOf = c => (IDictionary)config.GetField("Slots").GetValue(c);
         Func<object, List<string>> rackOf = c => (List<string>)((IDictionary)config.GetField("Storage").GetValue(c))[12];
         MethodInfo mergeMethod = merge.GetMethod("Merge");
+        // Merge(current, seen, wanted, apply, sockets, racks, ownChange, applied, refused): here what is applied is the
+        // change as sent, and no earlier change is the same player's.
         Func<object, object, object, List<string>, List<string>, object> run = (current, seen, wanted, applied, refused) =>
-            mergeMethod.Invoke(null, new[] { current, seen, wanted, sockets, racks, applied, refused });
+            mergeMethod.Invoke(null, new[] { current, seen, wanted, wanted, sockets, racks, null, applied, refused });
 
         // A and B both start from the same loadout. B's change (rack slot 2) reached the host first; A changed the
         // hardpoint. Both changes stay.
@@ -726,6 +774,35 @@ internal static class Program
         merged = run(current, seen, wanted, applied, refused);
         Check(slotsOf(merged).Count == 1 && (string)slotsOf(merged)[0] == "m:33333333333333333333333333333333" && applied.Count == 1 && applied[0] == "hp:0",
             "a hardpoint changes as a whole (the 2x1 in #0 takes the place of the 1x1 in #1)");
+
+        // 0.9.1: the host's own loadout holds something its checks would take out (a module a game update removed, say).
+        // A player changes another part: told from what they sent, nothing else reads as changed, so nothing is refused,
+        // and what is applied comes from the change after the host's checks.
+        current = layout();
+        rackOf(current)[2] = "i:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        seen = clone(current);
+        wanted = clone(current);
+        rackOf(wanted)[1] = "i:ffffffffffffffffffffffffffffffff";
+        object checkedWanted = clone(wanted);
+        rackOf(checkedWanted)[2] = "";
+        applied.Clear();
+        refused.Clear();
+        merged = mergeMethod.Invoke(null, new[] { current, seen, wanted, checkedWanted, sockets, racks, null, applied, refused });
+        Check(refused.Count == 0 && applied.Count == 1 && applied[0] == "rack:12:1" && rackOf(merged)[1] == "i:ffffffffffffffffffffffffffffffff" &&
+              rackOf(merged)[2] == "i:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "a part the host's checks would change in its own loadout doesn't make a player's other change a conflict");
+
+        // A player's quick second change to the same part, before their first came back to them, is not their own conflict.
+        current = clone(seen);
+        rackOf(current)[0] = "i:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        wanted = clone(seen);
+        rackOf(wanted)[0] = "i:cccccccccccccccccccccccccccccccc";
+        applied.Clear();
+        refused.Clear();
+        Func<string, bool> mine = part => part == "rack:12:0";
+        merged = mergeMethod.Invoke(null, new[] { current, seen, wanted, wanted, sockets, racks, mine, applied, refused });
+        Check(refused.Count == 0 && rackOf(merged)[0] == "i:cccccccccccccccccccccccccccccccc",
+            "a player's second change to a part they changed a moment ago is made, not refused");
 
         // What a change carries arrives whole: the loadout it was made against, and the host's answer.
         Type json = System.Type.GetType("Newtonsoft.Json.JsonConvert, Newtonsoft.Json", true);
@@ -773,6 +850,8 @@ internal static class Program
             "a pasted message with a share code in it brings the whole loadout back (ship type, racks, contents, alloys)");
         var broken = new object[] { code.Substring(0, code.Length / 2), null, null, null };
         Check(!(bool)read.Invoke(null, broken) && broken[3] != null, "a cut-off code is refused with a reason (\"" + broken[3] + "\")");
+        var madeUp = new object[] { (string)codes.GetMethod("Make").Invoke(null, new[] { (object)"not a ship at all", loadout }), null, null, null };
+        Check(!(bool)read.Invoke(null, madeUp) && madeUp[3] != null, "a code whose ship isn't a ship type id is refused (\"" + madeUp[3] + "\")");
         var none = new object[] { "nothing to see here", null, null, null };
         Check(!(bool)read.Invoke(null, none) && ((string)none[3]).Contains("SC1-"), "text without a code says how a code starts");
     }
@@ -810,6 +889,21 @@ internal static class Program
             args = new object[] { file, null };
             read.Invoke(null, args);
             Check((string)args[1] == "cut short", "a save an older version cut short (only .tmp left) is still found");
+
+            // 0.9.1: an empty or damaged file (a power cut) comes back from the copy kept before the last save.
+            File.Delete(file + ".tmp");
+            MethodInfo load = safe.GetMethod("Load").MakeGenericMethod(typeof(Dictionary<string, int>));
+            write.Invoke(null, new object[] { file, "{\"good\":1}" });
+            write.Invoke(null, new object[] { file, "{\"good\":2}" });
+            File.WriteAllText(file, "");
+            var loadArgs = new object[] { file, "a test file", null };
+            load.Invoke(null, loadArgs);
+            var loaded = (Dictionary<string, int>)loadArgs[2];
+            Check(loaded != null && loaded["good"] == 1 && File.Exists(file + ".broken"),
+                "an empty file is kept as .broken and the copy from before the last save is used");
+            write.Invoke(null, new object[] { file, "{\"good\":3}" });
+            Check(File.ReadAllText(file + ".bak") == "{\"good\":1}" && File.ReadAllText(file) == "{\"good\":3}",
+                "the next save keeps that good copy as .bak (the damaged file never replaces it)");
         }
         finally
         {

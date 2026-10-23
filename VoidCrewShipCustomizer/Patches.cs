@@ -38,15 +38,16 @@ namespace VoidCrewShipCustomizer
             core &= Patch("UI.ShipLoadoutTerminal.LoadoutList", "Sort", nameof(SortPrefix), null);
             core &= Patch("UI.ShipLoadoutTerminal.LoadoutList", "BindItem", nameof(BindItemPrefix), null);
             core &= Patch("UI.ShipLoadoutTerminal.ModuleLayout", "Show", null, nameof(ModuleLayoutShowPostfix));
-            core &= Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "Display", null, nameof(DisplayPostfix));
+            core &= Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "Display", nameof(DisplayPrefix), nameof(DisplayPostfix));
             // Progression must pause during CUSTOM runs (Void Crew modding rules), so this one is required too.
             core &= Patch("CG.Profile.PlayerRewardsCollection", "AddItem", nameof(BlockRewardsPrefix), null);
 
             // Shows CUSTOM (rather than the loadout standing in for it) as the room's choice everywhere in the hub. Required:
             // without it the game sends a CUSTOM id on to every player each time a quest is picked.
             core &= PatchSelectionNotice();
-
-            Patch("HubShipManager", "Start", null, nameof(HubStartPostfix));
+            // Back in the hub: the only place a CUSTOM run's pause, the closed room and the mission's state are reset, so
+            // CUSTOM can't be offered without it.
+            core &= Patch("HubShipManager", "Start", null, nameof(HubStartPostfix));
             Patch("Gameplay.Hub.HubQuestManager", "SelectPreservedSessionQuest", nameof(SelectSavedRunPrefix), null);
             // A saved CUSTOM run doesn't start while someone in the room is still without the mod (they join faster than
             // the room is checked: the start countdown is 30 s at most).
@@ -245,6 +246,7 @@ namespace VoidCrewShipCustomizer
             try
             {
                 CustomizerRuntime.GameReady = true;
+                LoadoutStore.Flush(true);
                 CustomLoadouts.OnMissionStarting(gameSession, preservedGameSession);
             }
             catch (Exception e)
@@ -305,11 +307,26 @@ namespace VoidCrewShipCustomizer
 
         private static void HubStartPostfix(HubShipManager __instance)
         {
+            CustomizerRuntime.GameReady = true;
+            // Each on its own: one going wrong must not keep the others from resetting.
             try
             {
-                CustomizerRuntime.GameReady = true;
                 ProgressionGuard.OnHubLoaded();
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Turning progression back on in the hub", e);
+            }
+            try
+            {
                 RoomSync.ReopenAfterCustomMission();
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Opening the room again after a CUSTOM mission", e);
+            }
+            try
+            {
                 CustomLoadouts.OnHubLoaded(__instance);
             }
             catch (Exception e)
@@ -374,6 +391,19 @@ namespace VoidCrewShipCustomizer
             catch (Exception e)
             {
                 Log.Failure("Drawing the CUSTOM hardpoints", e);
+            }
+        }
+
+        /// <summary>A CUSTOM loadout is built just before the terminal shows it, when it changed since it was last shown.</summary>
+        private static void DisplayPrefix(ShipLoadoutDataDef def)
+        {
+            try
+            {
+                CustomLoadouts.EnsureBuilt(def);
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Building the CUSTOM loadout to show", e);
             }
         }
 

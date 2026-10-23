@@ -89,7 +89,7 @@ or not running on the host), all of this stays off and out of sight, and Ship Cu
 | Rules > AnyItemOnAnyRack | true | Any item goes in any storage rack slot, in the CUSTOM editor and during a CUSTOM run. Big items can stick out of small slots. |
 | Rules > CopyPresetModuleContents | true | A module that a game loadout also uses starts with the same contents (loaded ammo crate, power cell). |
 | Rules > ShowQuestItems | false | List quest items in the storage picker. They can confuse mission objectives. |
-| Diagnostics > WriteGameDataReport | true | Writes everything the mod found to `ShipCustomizer\game-data.txt` in the game's save folder, for bug reports. |
+| Diagnostics > WriteGameDataReport | true | After an update of the mod or the game, writes everything the mod found to `ShipCustomizer\game-data.txt` in the game's save folder, for bug reports. |
 | Diagnostics > VerboseLogging | false | Extra detail in the BepInEx log. |
 
 ## Known limits

@@ -55,6 +55,10 @@ namespace VoidCrewShipCustomizer
         }
 
         private const string AllTab = "ALL";
+        /// <summary>More rows than this open on the first tab instead of ALL.</summary>
+        private const int ManyRows = 100;
+        /// <summary>How long after opening a click in the window is still taken for the click that opened it.</summary>
+        private const float PickDelaySeconds = 0.35f;
 
         private static readonly Stack<Row> Pool = new Stack<Row>();
         /// <summary>The template the pooled rows were made from (a new terminal can bring a new one).</summary>
@@ -68,6 +72,7 @@ namespace VoidCrewShipCustomizer
         private readonly Dictionary<string, VisualElement> _tabButtons = new Dictionary<string, VisualElement>();
         private readonly List<Row> _rows = new List<Row>();
         private string _tab;
+        private float _openedAt;
 
         public Action Closed;
 
@@ -128,7 +133,11 @@ namespace VoidCrewShipCustomizer
             List<string> categories = entries.Where(e => !e.Pinned && !string.IsNullOrEmpty(e.Category)).Select(e => e.Category).Distinct().ToList();
             if (categories.Count > 1) AddTab(AllTab);
             foreach (string category in categories) AddTab(category);
-            _tab = categories.Count > 1 ? (categories.Contains(initialTab) ? initialTab : AllTab) : null;
+            // A long list (every item for a rack slot) opens on its first tab rather than ALL: hundreds of rows at once make
+            // the window slow to open, in VR above all.
+            string opening = entries.Count(e => !e.Pinned) > ManyRows ? categories.FirstOrDefault() : AllTab;
+            _tab = categories.Count > 1 ? (categories.Contains(initialTab) ? initialTab : opening) : null;
+            _openedAt = Time.unscaledTime;
             // The tab the window opens on is highlighted from the start, not only once another one is clicked.
             foreach (string key in _tabButtons.Keys) StyleTab(key);
 
@@ -152,6 +161,7 @@ namespace VoidCrewShipCustomizer
                 _tab = name;
                 foreach (string key in _tabButtons.Keys) StyleTab(key);
                 Rebuild();
+                _scroll.scrollOffset = Vector2.zero;
             });
             tab.style.marginBottom = 6;
             _tabButtons[name] = tab;
@@ -249,6 +259,8 @@ namespace VoidCrewShipCustomizer
         {
             Action pick = entry.OnPick;
             if (pick == null || !entry.Enabled || entry.Info) return;
+            // The second click of a double-click (or a bouncing VR trigger) that opened this window isn't a pick in it.
+            if (Time.unscaledTime - _openedAt < PickDelaySeconds) return;
             Close();
             pick();
         }
