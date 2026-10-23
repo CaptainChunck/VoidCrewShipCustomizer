@@ -130,8 +130,11 @@ namespace VoidCrewShipCustomizer
         /// CUSTOM is picked: on the host, remember it and let the game pick the ship's first loadout in its place, so no
         /// player ever receives a loadout id they don't know. Any other pick on the host turns CUSTOM off.
         /// </summary>
-        private static bool SelectShipPrefix(HubShipManager __instance, ref int[] guid)
+        private static bool SelectShipPrefix(HubShipManager __instance, ref int[] guid, bool __runOriginal)
         {
+            // Another plugin's prefix already refused this request (Void Crew Fleet: a ship 1 pick from a player of the
+            // other team). HarmonyX still runs the later prefixes; CUSTOM must not be switched on or off for it.
+            if (!__runOriginal) return false;
             try
             {
                 var selected = new GUIDUnion(guid);

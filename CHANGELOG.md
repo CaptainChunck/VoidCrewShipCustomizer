@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.2
+
+- **Ready for Void Crew Fleet 0.4.2:** when Fleet refuses a request to change ship 1's loadout (in a Fleet Battle, from a
+  player of the other team), Ship Customizer no longer switches CUSTOM on or off for it. Only a tampered game could
+  send such a request.
+
 ## 0.9.1
 
 A full code review, with fixes and speed-ups.
