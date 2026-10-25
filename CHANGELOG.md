@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.4
+
+- **Saves are tried again:** if a virus scanner or backup tool holds the save file for a moment, your last CUSTOM changes
+  are no longer lost. Ship Customizer tries again a few seconds later, and a few times in a row before a mission and as
+  the game closes. A CUSTOM run that couldn't be written is no longer forgotten, so continuing it later still keeps
+  progression paused.
+- **Safer after game updates:** CUSTOM now turns off if an update stops Ship Customizer from pausing any kind of
+  progression (achievements, quest progress, stats and Steam stats, daily and weekly quests, the start of a saved CUSTOM
+  run), not only rewards. The log says which kind.
+
 ## 0.9.3
 
 - **Setting up a ship together works at the terminal.** Players' changes did reach the host, but every other terminal
