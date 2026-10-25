@@ -153,6 +153,26 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>
+        /// <see cref="Write"/>, tried up to <paramref name="tries"/> times a tenth of a second apart while the file can't be
+        /// written (a virus scanner or a backup tool holding it open for a moment). Throws what the last try threw.
+        /// </summary>
+        public static void WriteWithRetries(string path, string text, int tries)
+        {
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    Write(path, text);
+                    return;
+                }
+                catch (Exception e) when (attempt < tries && (e is IOException || e is UnauthorizedAccessException))
+                {
+                    Thread.Sleep(100);
+                }
+            }
+        }
+
+        /// <summary>
         /// Keeps a copy of a file that could not be understood, before it is replaced: the file itself, or the save that was
         /// cut short (".tmp") when only that is there (it is what was read).
         /// </summary>

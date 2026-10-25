@@ -215,14 +215,21 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
   run's session id, so a player who becomes host mid-run keeps it paused and remembers the run, and a flag left behind
   never pauses a later mission. Leaving the room mid-run keeps the pause until the hub or another mission: the game saves
   a mission's stats while unloading it (`PlayerMetricTracker.OnDisable`), after the room is gone. Every Harmony patch is
-  looked up by name and applied on its own, so a game update turns CUSTOM off instead of breaking the game.
+  looked up by name and applied on its own, so a game update turns CUSTOM off instead of breaking the game. CUSTOM is
+  only offered while the rewards hook and at least one hook for every other kind of progression are in: achievements,
+  quest progress, tracked and Steam stats during a mission (`TrackedMetric`) and as it ends (Steam's `SubmitProgress`,
+  the profile's outer wrapper), daily and weekly quests, and the start of a saved CUSTOM run
+  (`HubQuestManager.StartQuest`). The log names any kind left without one; a player whose hooks are missing doesn't
+  count as having the mod.
 - A CUSTOM loadout's ship for the terminal is built just before the terminal shows it (a `Display` prefix), and the
   room's choice when the game asks for it, so loading the hub reads no modules. Remote changes redraw the terminal once
   per frame at most, and the room's choice is only told around the hub again when ship 1's choice itself changes.
 - Saving: `SafeFile` writes to `.tmp`, flushed to the disk, then replaces the file and keeps the one before as `.bak`. An
   empty or damaged file is kept as `.broken` and the `.bak` (then the `.tmp`) is read instead. Loadout changes are saved
-  a second after the last one, straight away before a mission and when the game closes. Fields from a newer version are
-  kept (`[JsonExtensionData]`).
+  a second after the last one, straight away before a mission and when the game closes. A write that fails (a virus
+  scanner or backup tool holding the file) keeps the changes waiting: it is tried again 5 seconds later (less often while
+  it keeps failing), and straight away (a CUSTOM run to remember, a mission starting, the game closing) a few times a
+  moment apart. Fields from a newer version are kept (`[JsonExtensionData]`).
 
 ### Public API for other mods
 

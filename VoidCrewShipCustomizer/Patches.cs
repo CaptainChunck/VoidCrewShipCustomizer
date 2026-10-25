@@ -48,10 +48,6 @@ namespace VoidCrewShipCustomizer
             // Back in the hub: the only place a CUSTOM run's pause, the closed room and the mission's state are reset, so
             // CUSTOM can't be offered without it.
             core &= Patch("HubShipManager", "Start", null, nameof(HubStartPostfix));
-            Patch("Gameplay.Hub.HubQuestManager", "SelectPreservedSessionQuest", nameof(SelectSavedRunPrefix), null);
-            // A saved CUSTOM run doesn't start while someone in the room is still without the mod (they join faster than
-            // the room is checked: the start countdown is 30 s at most).
-            Patch("Gameplay.Hub.HubQuestManager", "StartQuest", nameof(StartQuestPrefix), null);
             Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnDestroy", nameof(TerminalDestroyPrefix), null);
             Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnLeaveUI", null, nameof(TerminalLeavePostfix));
             // Every player's terminal shows the room's choice when it changes, and when they start using the terminal, so
@@ -63,25 +59,54 @@ namespace VoidCrewShipCustomizer
             // A CUSTOM ship's racks hold exactly what was chosen, checked right after the ship spawns.
             Patch("ShipLoadout", "InitializeShip", null, nameof(InitializeShipPostfix));
 
-            // The rest of progression: best effort.
+            // The rest of progression, by kind. CUSTOM is only offered while every kind can be paused, so a game update that
+            // takes away all of one kind's hooks turns CUSTOM off instead of letting that progression through (see Covered).
+            // The game hands most of these calls along a chain of wrappers around the profile (Steam's, the cloud's, the
+            // profile's own), so a hook anywhere in the chain stops the whole call.
+            // Rewards: the required hook above stops them; the cloud's wrapper only passes them on to it.
             Patch("CG.Cloud.CloudRewardsProfileSync", "AddItem", nameof(BlockRewardsPrefix), null);
-            Patch("CG.Profile.PlayerAchievements", "SetAchievementComplete", nameof(BlockAchievementsPrefix), null);
-            Patch("SteamPlayerAchievementsSync", "SetAchievementComplete", nameof(BlockAchievementsPrefix), null);
-            Patch("CG.Cloud.CloudPlayerAchievementsSync", "SetAchievementComplete", nameof(BlockAchievementsPrefix), null);
-            Patch("CG.Profile.PlayerProfileData", "AddQuestProgress", nameof(BlockQuestProgressPrefix), null);
-            Patch("CG.Cloud.CloudPlayerProfileDataSync", "AddQuestProgress", nameof(BlockQuestProgressPrefix), null);
-            Patch("CG.Profile.PhotonPlayerDataSync", "AddQuestProgress", nameof(BlockQuestProgressPrefix), null);
-            // Tracked stats (the profile's lifetime counters, Steam stats, and the achievements built on them) and the daily
-            // and weekly quests, which count on their own and are saved when the mission ends.
-            Patch("TrackedMetric", "OnMetricProgressChange", nameof(BlockStatsPrefix), null);
+            bool progression = Covered("pausing achievements",
+                Patch("CG.Profile.PlayerAchievements", "SetAchievementComplete", nameof(BlockAchievementsPrefix), null),
+                Patch("SteamPlayerAchievementsSync", "SetAchievementComplete", nameof(BlockAchievementsPrefix), null),
+                Patch("CG.Cloud.CloudPlayerAchievementsSync", "SetAchievementComplete", nameof(BlockAchievementsPrefix), null));
+            progression &= Covered("pausing quest progress",
+                Patch("CG.Profile.PlayerProfileData", "AddQuestProgress", nameof(BlockQuestProgressPrefix), null),
+                Patch("CG.Cloud.CloudPlayerProfileDataSync", "AddQuestProgress", nameof(BlockQuestProgressPrefix), null),
+                Patch("CG.Profile.PhotonPlayerDataSync", "AddQuestProgress", nameof(BlockQuestProgressPrefix), null));
+            // Tracked stats (the profile's lifetime counters, Steam stats, and the achievements built on them). During a
+            // mission every change goes through TrackedMetric, which also sets its Steam stat itself. As the mission ends every
+            // stat goes to the chain's outer wrapper, Steam's, which sets the Steam stat before passing it on: the cloud's and
+            // the profile's own hooks only keep the counters.
+            progression &= Covered("pausing tracked stats and Steam stats during a mission",
+                Patch("TrackedMetric", "OnMetricProgressChange", nameof(BlockStatsPrefix), null));
+            progression &= Covered("pausing tracked stats and Steam stats as a mission ends",
+                Patch("SteamPlayerTrackedMetrics", "SubmitProgress", nameof(BlockStatsPrefix), null));
             Patch("CG.Profile.PlayerTrackedMetrics", "SubmitProgress", nameof(BlockStatsPrefix), null);
             Patch("CloudPlayerTrackedMetricSync", "SubmitProgress", nameof(BlockStatsPrefix), null);
-            Patch("SteamPlayerTrackedMetrics", "SubmitProgress", nameof(BlockStatsPrefix), null);
-            Patch("Metaquest", "OnMetricProgress", nameof(BlockDailyQuestsPrefix), null);
+            // The daily and weekly quests count on their own and are saved when the mission ends.
+            progression &= Covered("pausing daily and weekly quests",
+                Patch("Metaquest", "OnMetricProgress", nameof(BlockDailyQuestsPrefix), null));
+            // A saved CUSTOM run doesn't start while someone in the room is still without the mod (they join faster than
+            // the room is checked: the start countdown is 30 s at most). Choosing it is refused too, which only says so sooner.
+            progression &= Covered("holding a saved CUSTOM run until everyone has the mod",
+                Patch("Gameplay.Hub.HubQuestManager", "StartQuest", nameof(StartQuestPrefix), null));
+            Patch("Gameplay.Hub.HubQuestManager", "SelectPreservedSessionQuest", nameof(SelectSavedRunPrefix), null);
 
-            CustomLoadouts.Available = core;
-            if (core) Log.Info("All game patches are in; the CUSTOM loadout is available at the ship loadout terminal.");
+            CustomLoadouts.Available = core && progression;
+            if (core && progression) Log.Info("All game patches are in; the CUSTOM loadout is available at the ship loadout terminal.");
+            else if (core) Log.Error("Not all of progression can be paused during CUSTOM runs (see above), so the CUSTOM loadout is turned off: Void Crew's modding rules say such a run must not earn progression. The game itself is unaffected.");
             else Log.Error("Some patches the CUSTOM loadout needs could not be applied (see above), so it is turned off. The game itself is unaffected.");
+        }
+
+        /// <summary>
+        /// One kind of progression, by whether its hooks went in: any one of them is enough (they sit in one chain of calls),
+        /// none turns CUSTOM off. Every hook is applied before this is called, so the others stay in as a back-up.
+        /// </summary>
+        private static bool Covered(string what, params bool[] applied)
+        {
+            if (Array.IndexOf(applied, true) >= 0) return true;
+            Log.Error("No game hook for " + what + " could be applied (the game may have changed).");
+            return false;
         }
 
         /// <summary>HubShipManager.NotifyShipSelected, with the two private fields its replacement needs.</summary>

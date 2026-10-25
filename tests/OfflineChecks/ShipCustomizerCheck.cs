@@ -603,6 +603,7 @@ internal static class Program
         ShareCodeChecks(plugin, config);
         SaveFileChecks(plugin, config);
         StorageDragChecks(plugin, config);
+        ProgressionHookChecks(plugin);
     }
 
     // ------------------------------------------------------------------ copying a storage rack slot by dragging it
@@ -1036,11 +1037,96 @@ internal static class Program
             write.Invoke(null, new object[] { file, "{\"good\":3}" });
             Check(File.ReadAllText(file + ".bak") == "{\"good\":1}" && File.ReadAllText(file) == "{\"good\":3}",
                 "the next save keeps that good copy as .bak (the damaged file never replaces it)");
+
+            // 0.9.4: a file held open for a moment (a virus scanner or a backup tool reading it) is written on a later try.
+            var holder = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var letGo = new System.Threading.Thread(() => { System.Threading.Thread.Sleep(50); holder.Dispose(); });
+            letGo.Start();
+            bool written;
+            try
+            {
+                safe.GetMethod("WriteWithRetries").Invoke(null, new object[] { file, "{\"good\":4}", 20 });
+                written = true;
+            }
+            catch (TargetInvocationException)
+            {
+                written = false;
+            }
+            letGo.Join();
+            Check(written && File.ReadAllText(file) == "{\"good\":4}", "a file held open for a moment is written on one of the quick tries");
+            StoreRetryChecks(plugin, folder);
         }
         finally
         {
             Directory.Delete(folder, true);
         }
+    }
+
+    /// <summary>0.9.4: the CUSTOM loadouts (and the remembered CUSTOM runs) stay waiting until a write works.</summary>
+    private static void StoreRetryChecks(Assembly plugin, string folder)
+    {
+        Type store = plugin.GetType("VoidCrewShipCustomizer.LoadoutStore", true);
+        Type storeFile = plugin.GetType("VoidCrewShipCustomizer.LoadoutStore+StoreFile", true);
+        // What the game would have read at first use (the save folder needs the game).
+        object loaded = Activator.CreateInstance(storeFile, true);
+        store.GetField("_file", BindingFlags.NonPublic | BindingFlags.Static).SetValue(null, loaded);
+        var runs = (List<string>)storeFile.GetField("CustomRuns").GetValue(loaded);
+        MethodInfo save = store.GetMethod("Save", BindingFlags.NonPublic | BindingFlags.Static, null, new[] { typeof(float) }, null);
+        MethodInfo flush = store.GetMethod("Flush", BindingFlags.NonPublic | BindingFlags.Static, null, new[] { typeof(bool), typeof(float), typeof(string) }, null);
+        string path = Path.Combine(folder, "custom-loadouts.json");
+        Action<string, float> rememberRun = (run, time) =>
+        {
+            runs.Add(run);
+            save.Invoke(null, new object[] { time });
+        };
+        Action<bool, float> flushAt = (now, time) => flush.Invoke(null, new object[] { now, time, path });
+        Func<string, bool> onDisk = run => File.Exists(path) && File.ReadAllText(path).Contains("\"" + run + "\"");
+
+        rememberRun("run-1", 100f);
+        flushAt(false, 100.5f);
+        bool waited = !onDisk("run-1");
+        flushAt(false, 101f);
+        Check(waited && onDisk("run-1"), "a change is written a second later");
+
+        // A CUSTOM run is remembered (written straight away, a few quick tries) while a virus scanner holds the file.
+        rememberRun("run-2", 110f);
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read)) flushAt(true, 110f);
+        bool failed = !onDisk("run-2") && onDisk("run-1");
+        flushAt(false, 112f);
+        bool waiting = !onDisk("run-2");
+        flushAt(false, 115f);
+        Check(failed && waiting && onDisk("run-2"),
+            "a write that fails while the file is held open keeps the change waiting (old file intact), and it is written 5 s later");
+
+        // The regular write fails just before the game closes: the closing save writes it at once.
+        rememberRun("run-3", 120f);
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read)) flushAt(false, 121f);
+        failed = !onDisk("run-3");
+        flushAt(true, 121.5f);
+        Check(failed && onDisk("run-3"), "the save as the game closes writes what a failed write left waiting");
+
+        // A write that keeps failing (a full disk, say) is tried less often: 5 s after the first failure, 10 s after the next.
+        rememberRun("run-4", 130f);
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            flushAt(false, 131f);
+            flushAt(false, 136f);
+        }
+        flushAt(false, 141f);
+        waiting = !onDisk("run-4");
+        flushAt(false, 146f);
+        Check(waiting && onDisk("run-4"), "a write that keeps failing is tried less often (5 s, then 10 s later)");
+    }
+
+    // ------------------------------------------------------------------ 0.9.4: progression hooks, by kind
+
+    private static void ProgressionHookChecks(Assembly plugin)
+    {
+        Console.WriteLine("Progression hooks (after a game update CUSTOM turns off rather than let progression through):");
+        MethodInfo covered = plugin.GetType("VoidCrewShipCustomizer.Patches", true).GetMethod("Covered", BindingFlags.NonPublic | BindingFlags.Static);
+        Func<bool[], bool> kind = applied => (bool)covered.Invoke(null, new object[] { "a test kind of progression", applied });
+        Check(kind(new[] { false, true, false }) && kind(new[] { true }), "a kind of progression counts as paused while any one of its hooks is in");
+        Check(!kind(new[] { false, false, false }) && !kind(new[] { false }), "a kind with none of its hooks in turns CUSTOM off");
     }
 
     private static void AddSocket(IList sockets, Type vector3, object right, object forward, string size, float x, float y, float z)

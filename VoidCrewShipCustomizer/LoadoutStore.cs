@@ -265,39 +265,77 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>How long changes wait before they are written, so a burst of picks makes one save instead of many.</summary>
         private const float SaveDelaySeconds = 1f;
+        /// <summary>How long changes wait for the next try after a write failed (a virus scanner held the file, say).</summary>
+        private const float RetryDelaySeconds = 5f;
+        /// <summary>How many times a write that can't wait (see <see cref="Flush(bool)"/>) is tried, a moment apart.</summary>
+        private const int QuickTries = 5;
         private static bool _unsaved;
         private static float _unsavedSince;
+        /// <summary>After a failed write: not tried again by the regular check before this time.</summary>
+        private static float _retryAt;
+        private static int _failedWrites;
 
-        /// <summary>Saves the file shortly (see <see cref="Flush"/>): picks in quick succession are written together.</summary>
+        /// <summary>Saves the file shortly (see <see cref="Flush(bool)"/>): picks in quick succession are written together.</summary>
         public static void Save()
+        {
+            Save(Time.unscaledTime);
+        }
+
+        /// <summary><see cref="Save()"/> at a given time (so the offline checks can run it without the game).</summary>
+        internal static void Save(float time)
         {
             if (_unsaved) return;
             _unsaved = true;
-            _unsavedSince = Time.unscaledTime;
+            _unsavedSince = time;
         }
 
         /// <summary>
         /// Writes what is waiting: once it has waited <see cref="SaveDelaySeconds"/> (called a few times a second), or straight
-        /// away with <paramref name="now"/> (a CUSTOM run to remember, a mission starting, the game quitting).
+        /// away with <paramref name="now"/> (a CUSTOM run to remember, a mission starting, the game quitting). Changes stay
+        /// waiting until a write works: a virus scanner or a backup tool can hold the file open for a moment, and a CUSTOM
+        /// run that never reaches the file would earn progression when it is continued later. A failed write is tried again
+        /// <see cref="RetryDelaySeconds"/> later (less often while it keeps failing), and one that can't wait is tried a few
+        /// times a moment apart.
         /// </summary>
         public static void Flush(bool now)
         {
-            if (!_unsaved || (!now && Time.unscaledTime - _unsavedSince < SaveDelaySeconds)) return;
-            _unsaved = false;
-            StoreFile file = File;
-            if (_readOnly)
+            float time = Time.unscaledTime;
+            if (Due(now, time)) Flush(now, time, FilePath);
+        }
+
+        private static bool Due(bool now, float time)
+        {
+            return _unsaved && (now || (time - _unsavedSince >= SaveDelaySeconds && time >= _retryAt));
+        }
+
+        /// <summary><see cref="Flush(bool)"/> at a given time, to a given file (so the offline checks can run it without the game).</summary>
+        internal static void Flush(bool now, float time, string path)
+        {
+            if (!Due(now, time)) return;
+            // Changes are only made to the file as read, so it has been read by now (and whether it can be saved is known).
+            StoreFile file = _file;
+            if (file == null || _readOnly)
             {
-                Log.WarnOnce("store read only", "Your Custom loadouts are not saved this session: " + FilePath + " could not be read when the game started.");
+                _unsaved = false;
+                if (_readOnly) Log.WarnOnce("store read only", "Your Custom loadouts are not saved this session: " + path + " could not be read when the game started.");
                 return;
             }
             try
             {
-                SafeFile.Write(FilePath, JsonConvert.SerializeObject(file, Formatting.Indented));
+                SafeFile.WriteWithRetries(path, JsonConvert.SerializeObject(file, Formatting.Indented), now ? QuickTries : 1);
             }
             catch (Exception e)
             {
-                Log.Failure("Saving the Custom loadouts to " + FilePath, e);
+                // Less often while it keeps failing (a full disk, say): every 30 seconds at most.
+                _failedWrites++;
+                _retryAt = time + RetryDelaySeconds * Math.Min(_failedWrites, 6);
+                Log.Failure("Saving the Custom loadouts to " + path + " (tried again a few seconds later, before a mission and as the game closes)", e);
+                return;
             }
+            _unsaved = false;
+            _retryAt = 0f;
+            if (_failedWrites > 0) Log.Info("Saved the Custom loadouts to " + path + " after all.");
+            _failedWrites = 0;
         }
 
         /// <summary>A Custom loadout that matches one of the game's own loadouts for this ship.</summary>

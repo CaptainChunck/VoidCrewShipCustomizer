@@ -84,7 +84,7 @@ namespace VoidCrewShipCustomizer
             }
         }
 
-        /// <summary>Changes still waiting to be written are saved before the game closes.</summary>
+        /// <summary>Changes still waiting to be written are saved before the game closes, also those a failed write left waiting.</summary>
         private void OnApplicationQuit()
         {
             try
