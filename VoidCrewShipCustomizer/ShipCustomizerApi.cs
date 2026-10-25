@@ -159,6 +159,9 @@ namespace VoidCrewShipCustomizer
             try
             {
                 if (ship < 2 || ship > CustomLoadouts.MaxShips) return;
+                // Host only: another player's ships follow the room, which only the host writes. (Without Void Crew Fleet
+                // running no ship 2 to 6 uses CUSTOM anywhere, so then nothing is asked of the room.)
+                if (FleetLink.Running && !PhotonNetwork.IsMasterClient) return;
                 HullInfo hull;
                 if (FleetLink.Running && GetDef(loadout) != null && CustomLoadouts.TryGetHullOfCustomGuid(loadout, out hull)) CustomLoadouts.ActivateShipAsHost(ship, hull);
                 else CustomLoadouts.DeactivateShipAsHost(ship);

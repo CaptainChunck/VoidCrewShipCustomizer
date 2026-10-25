@@ -134,6 +134,11 @@ namespace VoidCrewShipCustomizer
         private static readonly Dictionary<string, string> PartEditors = new Dictionary<string, string>();
         /// <summary>The actor number of who last changed each part, so a player's quick second change isn't refused as their own conflict.</summary>
         private static readonly Dictionary<string, int> PartEditorActors = new Dictionary<string, int>();
+        /// <summary>
+        /// The host's loadout (as JSON) another player's latest change to each part was made from, to tell whether their next
+        /// change was made from the same one (see LayoutMerge.TakeBack). None for the host's own changes.
+        /// </summary>
+        private static readonly Dictionary<string, string> PartEditorViews = new Dictionary<string, string>();
         /// <summary>Who last changed each loadout ("hull/ship"), as seen by a player other than the host.</summary>
         private static readonly Dictionary<string, string> LayoutEditors = new Dictionary<string, string>();
         private static readonly Dictionary<string, float> LastChangeToast = new Dictionary<string, float>();
@@ -405,7 +410,27 @@ namespace VoidCrewShipCustomizer
         {
             if (!ValidShip(ship)) return;
             if (config == null) ConfirmedLayouts[ship].Remove(hullGuid);
-            else ConfirmedLayouts[ship][hullGuid] = Normalize(config.Clone());
+            else ConfirmedLayouts[ship][hullGuid] = config.Clone().Normalized();
+        }
+
+        /// <summary>
+        /// Other players: the host's loadout of one player ship and ship type exactly as last read from the room, or null
+        /// (none shared, or the ship follows ship 1). Unlike <see cref="ConfirmedLayout"/>, nothing stands in for it.
+        /// </summary>
+        public static HullConfig ConfirmedLayoutOf(int ship, GUIDUnion hullGuid)
+        {
+            HullConfig config;
+            return ValidShip(ship) && ConfirmedLayouts[ship].TryGetValue(hullGuid, out config) ? config : null;
+        }
+
+        /// <summary>
+        /// Whether two loadouts are the same, part for part and note for note (both normalized: the same loadout then always
+        /// writes the same JSON, its lists being sorted by position).
+        /// </summary>
+        internal static bool SameLoadout(HullConfig a, HullConfig b)
+        {
+            if (a == null || b == null) return a == b;
+            return Newtonsoft.Json.JsonConvert.SerializeObject(a, Newtonsoft.Json.Formatting.None) == Newtonsoft.Json.JsonConvert.SerializeObject(b, Newtonsoft.Json.Formatting.None);
         }
 
         /// <summary>The host's loadout as last read from the room, which this player's next change is measured against.</summary>
@@ -418,13 +443,22 @@ namespace VoidCrewShipCustomizer
             return HostLayout(hull, ship);
         }
 
-        public static void SetHostLayout(int ship, GUIDUnion hullGuid, HullConfig config)
+        /// <summary>
+        /// Other players: the host's loadout to show for one player ship and ship type (null: none shared / the ship follows
+        /// ship 1). Returns whether that changes what this player sees, so an answer that changes nothing redraws nothing.
+        /// </summary>
+        public static bool SetHostLayout(int ship, GUIDUnion hullGuid, HullConfig config)
         {
-            if (!ValidShip(ship)) return;
+            if (!ValidShip(ship)) return false;
+            HullConfig shown;
+            HostLayouts[ship].TryGetValue(hullGuid, out shown);
+            if (config != null) config.Normalized();
+            if (SameLoadout(shown, config)) return false;
             if (config == null) HostLayouts[ship].Remove(hullGuid);
-            else HostLayouts[ship][hullGuid] = Normalize(config);
+            else HostLayouts[ship][hullGuid] = config;
             HullInfo hull;
             if (ByShip.ContainsKey(hullGuid) && Catalog.TryGetHull(hullGuid, out hull)) Refresh(hull);
+            return true;
         }
 
         /// <summary>The host changed (or this player became the host): the old host's shared loadouts no longer apply.</summary>
@@ -478,12 +512,18 @@ namespace VoidCrewShipCustomizer
                 var applied = new List<string>();
                 var refusedParts = new List<string>();
                 HullConfig result;
+                string view = null;
                 if (edit.Base != null)
                 {
                     // Only this player's own changes, part by part: what someone else changed since they last looked stays.
                     // What they changed is told from what they sent; what it becomes, from it after this PC's checks.
                     result = LayoutMerge.Merge(current, edit.Base, edit.Config, wanted, hull.Sockets, RackSlots(hull),
                                                part => LastEditorActor(hull, edit.Ship, part) == actor, applied, refusedParts);
+                    // And a part they put back while their own change to it, made from this same loadout, was on its way.
+                    view = Newtonsoft.Json.JsonConvert.SerializeObject(edit.Base, Newtonsoft.Json.Formatting.None);
+                    LayoutMerge.TakeBack(current, edit.Base, edit.Config, wanted, hull.Sockets, RackSlots(hull),
+                                         part => LastEditorActor(hull, edit.Ship, part) == actor && LastEditorView(hull, edit.Ship, part) == view,
+                                         result, applied, refusedParts);
                 }
                 else
                 {
@@ -491,7 +531,10 @@ namespace VoidCrewShipCustomizer
                     applied.AddRange(LayoutMerge.Changed(current, wanted, hull.Sockets, RackSlots(hull)));
                     result = wanted;
                 }
-                var reasons = refusedParts.ToDictionary(p => p, p => EditorOf(hull, edit.Ship, p));
+                // Why each part wasn't made, in words that follow the part's name (see RoomSync.RefusedMessage).
+                var reasons = refusedParts.ToDictionary(p => p, p => LayoutMerge.Dropped(edit.Config, wanted, hull.Sockets, p)
+                    ? NotAllowedByHost
+                    : EditorOf(hull, edit.Ship, p) + " got there first");
                 // One of each one-per-ship module: two players fitting the same one at once on different hardpoints. Putting
                 // one back can double another, so again until none is (each round puts at least one changed part back).
                 for (List<KeyValuePair<string, string>> doubles = DoubledSingles(hull, result, applied); doubles.Count > 0; doubles = DoubledSingles(hull, result, applied))
@@ -505,16 +548,17 @@ namespace VoidCrewShipCustomizer
                     }
                 }
                 refused = refusedParts.Select(p => PartName(hull, p) + " (" + reasons[p] + ")").ToList();
-                if (refusedParts.Count > 0) Log.Info("Kept what others changed first, instead of " + who + "'s change: " + string.Join(", ", refused.ToArray()) + ".");
+                if (refusedParts.Count > 0) Log.Info("Didn't make these parts of " + who + "'s change: " + string.Join("; ", refused.ToArray()) + ".");
                 if (applied.Count == 0)
                 {
-                    // Nothing of theirs was made (all refused, or the same change again): they are told, and see the loadout
-                    // as it is. Nothing is saved: a ship that follows ship 1 keeps following it.
-                    OnEdited(hull, actor, edit.N, edit.Ship, refused);
+                    // Nothing of theirs was made (all refused, or the same change again): only they get an answer, with the
+                    // loadout as it is, so their terminal shows it again and tells them why. Nothing is saved or shared again
+                    // (a ship that follows ship 1 keeps following it), and the other players see nothing new.
+                    RoomSync.PublishLayouts(hull, actor, edit.N, edit.Ship, refused);
                     return;
                 }
                 LoadoutStore.Set(hull, result, edit.Ship);
-                NoteEditors(hull, edit.Ship, applied, who, actor);
+                NoteEditors(hull, edit.Ship, applied, who, actor, view);
             }
             OnEdited(hull, actor, edit.N, edit.Ship, refused);
             TerminalUi.OnLoadoutChangedRemotely();
@@ -522,6 +566,9 @@ namespace VoidCrewShipCustomizer
             Log.Info(who + " changed " + what + ".");
             ToastChange(who, what);
         }
+
+        /// <summary>Why a part of a player's change wasn't made when the host's checks would take their choice out.</summary>
+        internal const string NotAllowedByHost = "not allowed by the host's settings";
 
         /// <summary>"" for ship 1 on its own, otherwise the ship's name and "'s " ("SHIP 2's ", "BLUE 1's "), for messages.</summary>
         public static string Whose(int ship)
@@ -539,7 +586,7 @@ namespace VoidCrewShipCustomizer
             HullInfo hull;
             var hullGuid = new GUIDUnion(edit.Hull);
             if (!Catalog.ShipGuids().Contains(hullGuid) || !Catalog.TryGetHull(hullGuid, out hull)) return;
-            RoomSync.PublishLayouts(hull, actor, edit.N, edit.Ship, new List<string> { "your change, because " + why });
+            RoomSync.PublishLayouts(hull, actor, edit.N, edit.Ship, new List<string> { "your change (" + why + ")" });
         }
 
         /// <summary>The number of slots of each storage rack, by core system index.</summary>
@@ -548,15 +595,27 @@ namespace VoidCrewShipCustomizer
             return hull.Shelves.ToDictionary(s => s.CoreIndex, s => s.Slots.Count);
         }
 
-        /// <summary>Host: remembers who changed which parts of a loadout, for the messages when two players collide.</summary>
-        private static void NoteEditors(HullInfo hull, int ship, IEnumerable<string> parts, string who, int actor)
+        /// <summary>
+        /// Host: remembers who changed which parts of a loadout, for the messages when two players collide, and the host's
+        /// loadout a player's change was made from (<paramref name="view"/>, as JSON; null for the host's own changes).
+        /// </summary>
+        private static void NoteEditors(HullInfo hull, int ship, IEnumerable<string> parts, string who, int actor, string view = null)
         {
             foreach (string part in parts)
             {
                 string key = hull.ShipGuid.AsHex() + "/" + ship + "/" + part;
                 PartEditors[key] = who;
                 PartEditorActors[key] = actor;
+                if (view != null) PartEditorViews[key] = view;
+                else PartEditorViews.Remove(key);
             }
+        }
+
+        /// <summary>Host: the host's loadout (as JSON) the latest change to a part was made from, or null (see PartEditorViews).</summary>
+        private static string LastEditorView(HullInfo hull, int ship, string part)
+        {
+            string view;
+            return PartEditorViews.TryGetValue(hull.ShipGuid.AsHex() + "/" + ship + "/" + part, out view) ? view : null;
         }
 
         /// <summary>Host: who last changed a part of a loadout, as far as this session knows.</summary>
@@ -576,6 +635,7 @@ namespace VoidCrewShipCustomizer
             string prefix = hull.ShipGuid.AsHex() + "/" + ship + "/";
             foreach (string key in PartEditors.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList()) PartEditors.Remove(key);
             foreach (string key in PartEditorActors.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList()) PartEditorActors.Remove(key);
+            foreach (string key in PartEditorViews.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList()) PartEditorViews.Remove(key);
         }
 
         /// <summary>Host: the actor number of the player who last changed a part of a loadout, or -1.</summary>
@@ -618,7 +678,8 @@ namespace VoidCrewShipCustomizer
         {
             if (before == null || after == null) return;
             Photon.Realtime.Player me = PhotonNetwork.LocalPlayer;
-            string who = me != null && !string.IsNullOrEmpty(me.NickName) ? me.NickName : "the host";
+            // Named the way every player's messages name the host (its nickname, or "player" and its number).
+            string who = me != null ? RoomSync.NameOf(me) : "the host";
             NoteEditors(hull, ship, LayoutMerge.Changed(before, after, hull.Sockets, RackSlots(hull)), who, me != null ? me.ActorNumber : 0);
         }
 
@@ -657,13 +718,18 @@ namespace VoidCrewShipCustomizer
             if (part == LayoutMerge.Homunculus) return "the homunculus";
             if (part == LayoutMerge.Alloys) return "the starting alloys";
             if (part == LayoutMerge.Fabricator) return "the fabricator level";
-            if (part.StartsWith("hp:")) return "HARDPOINT " + (int.Parse(part.Substring(3)) + 1);
-            if (part.StartsWith("rack:"))
+            int group, rack, slot;
+            if (LayoutMerge.IsHardpoint(part, out group)) return "HARDPOINT " + (group + 1);
+            if (LayoutMerge.IsRackSlot(part, out rack, out slot))
             {
-                string[] bits = part.Split(':');
-                int rack = int.Parse(bits[1]);
-                ShelfInfo shelf = hull.Shelves.FirstOrDefault(s => s.CoreIndex == rack);
-                return (shelf != null ? shelf.Name : "a storage rack") + " slot " + (int.Parse(bits[2]) + 1);
+                ShelfInfo shelf = null;
+                foreach (ShelfInfo candidate in hull.Shelves)
+                {
+                    if (candidate.CoreIndex != rack) continue;
+                    shelf = candidate;
+                    break;
+                }
+                return (shelf != null ? shelf.Name : "a storage rack") + " slot " + (slot + 1);
             }
             return part;
         }
@@ -785,11 +851,6 @@ namespace VoidCrewShipCustomizer
         private static string Code(string code)
         {
             return code != null && code.Length <= 80 ? code : "";
-        }
-
-        private static HullConfig Normalize(HullConfig config)
-        {
-            return config.Normalized();
         }
 
         /// <summary>Whether the room uses this ship's CUSTOM loadout for the ship the terminal is setting up.</summary>
@@ -1090,7 +1151,9 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>
         /// If the room's chosen loadout is the stand-in for an active CUSTOM loadout, the CUSTOM loadout to show instead.
-        /// Called from HubShipManager.CurrentShipSelected, so it must be cheap and never throw.
+        /// Called from HubShipManager.CurrentShipSelected, which the game reads every frame, so it must be cheap and never
+        /// throw. It doesn't build the CUSTOM ship: only the terminal shows that (built just before, see EnsureBuilt); the rest
+        /// of the hub only shows CUSTOM's name and the ship type's hologram, which never change.
         /// </summary>
         public static bool TryMapToCustom(ShipLoadoutDataDef selected, out ShipLoadoutDataDef custom)
         {
@@ -1100,8 +1163,6 @@ namespace VoidCrewShipCustomizer
             if (!ByShip.TryGetValue(ActiveShip, out entry) || entry.Hull.BasePreset == null) return false;
             if (selected.AssetGuid != entry.Hull.BasePreset.AssetGuid) return false;
             custom = entry.Def;
-            // The room's choice is shown around the hub too (not only on the terminal), so it is always built.
-            if (entry.Stale) EnsureBuilt(custom);
             return true;
         }
 
@@ -1132,7 +1193,8 @@ namespace VoidCrewShipCustomizer
         /// <summary>
         /// A CUSTOM loadout was changed and saved on this PC. On the host, tell the other players: the room's chosen
         /// loadouts, and the shared loadouts (<paramref name="ship"/> names the player ship that changed, 0 for all;
-        /// <paramref name="by"/> and <paramref name="n"/> name the player's change, 0 for the host's own).
+        /// <paramref name="by"/> and <paramref name="n"/> name the player's change, 0 for the host's own, which the other
+        /// players are told came from the host).
         /// </summary>
         public static void OnEdited(HullInfo hull, int by = 0, int n = 0, int ship = 0, List<string> refused = null)
         {
@@ -1143,7 +1205,7 @@ namespace VoidCrewShipCustomizer
             {
                 if (ActiveShips[s] == hull.ShipGuid) RoomSync.PublishCustom(s, hull, LoadoutStore.Get(hull, s));
             }
-            RoomSync.PublishLayouts(hull, by, n, ship, refused);
+            RoomSync.PublishLayouts(hull, by, n, ship, refused, by == 0);
         }
 
         /// <summary>
@@ -1332,7 +1394,10 @@ namespace VoidCrewShipCustomizer
         {
             public string Hull;
             public string Which;
-            /// <summary>The loadout handed to the game, and the same as JSON, to recognise a copy of it (Void Crew Fleet's "as ship 1").</summary>
+            /// <summary>
+            /// The loadout handed to the game, and the same as JSON to recognise a copy of it: only a Void Crew Fleet older than
+            /// 0.4.0 spawns its "as ship 1" as such a copy, so the JSON is made only for one (see <see cref="OldFleetCopies"/>).
+            /// </summary>
             public ShipLoadout Loadout;
             public string Json;
             public HashSet<int> Racks;
@@ -1365,7 +1430,7 @@ namespace VoidCrewShipCustomizer
                 Hull = hull.Name,
                 Which = which,
                 Loadout = loadout,
-                Json = JsonOf(loadout),
+                Json = OldFleetCopies ? JsonOf(loadout) : null,
                 Racks = new HashSet<int>(hull.Shelves.Select(s => s.CoreIndex)),
                 // Continuing a saved run, the game puts the fabricators back as they were.
                 FabricatorLevel = _missionIsSavedRun ? 0 : config.FabricatorLevel,
@@ -1373,6 +1438,16 @@ namespace VoidCrewShipCustomizer
                     ? new Dictionary<int, List<string>>()
                     : config.Contents.Where(c => built.Contains(c.Key) && c.Value != null).ToDictionary(c => c.Key, c => c.Value.ToList())
             });
+        }
+
+        /// <summary>
+        /// Whether this mission's ships can include a copy of a CUSTOM ship made from its contents: only a Void Crew Fleet
+        /// older than 0.4.0 (without ShipCount) spawns its "as ship 1" that way. Fleet 0.4.0 and newer spawn the very same
+        /// loadout, and without Fleet the game spawns only ship 1.
+        /// </summary>
+        private static bool OldFleetCopies
+        {
+            get { return FleetLink.Running && !FleetLink.KnowsManyShips; }
         }
 
         private static string JsonOf(ShipLoadout loadout)
@@ -1409,7 +1484,7 @@ namespace VoidCrewShipCustomizer
             {
                 // Only for a Fleet without ships 3 to 6: matching by contents would also take a plain stand-in ship for a
                 // copy of a CUSTOM ship that changes no modules.
-                if (FleetLink.KnowsManyShips) return;
+                if (!OldFleetCopies) return;
                 string json = JsonOf(loadout);
                 plan = json == null ? null : ShipPlans.FirstOrDefault(p => p.Json == json);
                 if (plan == null) return;
@@ -1628,6 +1703,7 @@ namespace VoidCrewShipCustomizer
             _terminalShip = 1;
             PartEditors.Clear();
             PartEditorActors.Clear();
+            PartEditorViews.Clear();
             // The terminal is back on ship 1 in the new room: lists made for another ship are done with.
             TerminalUi.OnTerminalShipChanged();
             LayoutEditors.Clear();
