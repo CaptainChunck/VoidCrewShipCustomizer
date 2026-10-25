@@ -95,14 +95,16 @@ Ship Customizer follows Void Crew's
   only starts while everyone in the room has the mod.
 - The CUSTOM loadouts are the host's. Everyone sees and changes the host's, and the changes are saved on the host's PC.
   LOAD LOADOUT has your saved loadouts and **YOUR OWN CUSTOM**, to bring in what's on your PC.
-- **Several players can set up the same ship together.** Every player's terminal shows what the room has chosen for the
-  ship it sets up, and moves along when anyone picks another loadout or CUSTOM (not while you're looking at another
-  loadout; it catches up when you start using the terminal again). Open lists update when someone else changes the
-  loadout. Changes are made part by part (each hardpoint, each rack slot, the homunculus, the alloys, the fabricator
-  level), so changes to different parts all stay. If two players change the same part at the same moment, the first
-  change stays and the other player is told who got there first, so nobody's change is silently replaced. Everyone is
-  told who changed the loadout. Just after you join, the terminal says WAITING FOR HOST until the host's CUSTOM loadouts
-  arrive.
+- **Several players can set up the same ship together.** Every player's terminal shows what the room has chosen for
+  ship 1, and moves along when anyone picks another loadout or CUSTOM for it (not while you're looking at another
+  loadout; it catches up when you start using the terminal again). For Void Crew Fleet's ships 2 to 6 it moves along
+  when CUSTOM is chosen for that ship; another choice for them is only marked in the list. Open lists update when
+  someone else changes the loadout. Changes are made part by part (each hardpoint, each rack slot, the homunculus, the
+  alloys, the fabricator level), so changes to different parts all stay. If two players change the same part at the
+  same moment, the first change stays and the other player is told who got there first, so nobody's change is silently
+  replaced. A pick the host's settings don't allow (the host has AllowAnySize or AnyItemOnAnyRack set differently from
+  you) isn't made either, and you're told why. Everyone is told who changed the loadout. Just after you join, or when
+  the room gets a new host, the terminal says WAITING FOR HOST until the host's CUSTOM loadouts arrive.
 - With a host on Ship Customizer 0.4.0 or older, only the host can choose or change CUSTOM; everyone else sees it.
 
 ## Manual install
@@ -175,12 +177,17 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
   ship as the room properties `SC_Layout<n>_<ship GUID>`, n from 1 to 6 (ships 2 to 6 only when they have their own).
   Other players send a change as the player property `SC_Edit<n>_<ship GUID>`: the whole loadout, addressed to the room
   and the host. The host keeps only what the ship has and what its settings allow (`Sanitize`), saves it and shares it
-  again.
+  again. From 0.9.5 each shared layout also names the host that shared it (`Host`): after a host change, players skip
+  the old host's layouts still in the room until the new host has shared its own, and the new host shares the room's
+  CUSTOM choices (`SC_Custom...`) again from its own loadouts.
 - Merged changes (0.8.0, protocol 3, `LayoutMerge`): a change also carries `Base`, the host's loadout as the player last
   read it. The host merges it part by part (each hardpoint group with its module's contents, each rack slot, the
   homunculus, the alloys, the fabricator level): a part the player changed is taken unless someone else changed it since
-  `Base`, in which case it is refused and the shared layout's `Refused` names it (and who changed it first). Changes
-  without `Base` (0.7.x and older) replace the whole loadout, as before.
+  `Base`, in which case it is refused and the shared layout's `Refused` names it (and who changed it first). A part
+  whose choice the host's checks would take out (the host's settings are stricter) is refused too, rather than emptied,
+  and a part the player put back while their own change to it was still on its way (both made from the same `Base`) is
+  put back (0.9.5, `LayoutMerge.TakeBack`). Changes without `Base` (0.7.x and older) replace the whole loadout, as
+  before.
 - Module contents (0.8.0): chosen contents are kept per hardpoint (`HullConfig.Contents`). The CUSTOM ship spawns with
   those modules empty, and the host puts the items in once the ship is in the world, into the module's real
   `CarryablesSockets`, each only where that socket accepts it.
@@ -221,9 +228,10 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
   the profile's outer wrapper), daily and weekly quests, and the start of a saved CUSTOM run
   (`HubQuestManager.StartQuest`). The log names any kind left without one; a player whose hooks are missing doesn't
   count as having the mod.
-- A CUSTOM loadout's ship for the terminal is built just before the terminal shows it (a `Display` prefix), and the
-  room's choice when the game asks for it, so loading the hub reads no modules. Remote changes redraw the terminal once
-  per frame at most, and the room's choice is only told around the hub again when ship 1's choice itself changes.
+- A CUSTOM loadout's ship for the terminal is built just before the terminal shows it (a `Display` prefix), so loading
+  the hub reads no modules, and a change made away from the terminal builds nothing until it is shown (the rest of the
+  hub only shows CUSTOM's name and the ship type's hologram). Remote changes redraw the terminal once per frame at most,
+  and the room's choice is only told around the hub again when ship 1's choice itself changes.
 - Saving: `SafeFile` writes to `.tmp`, flushed to the disk, then replaces the file and keeps the one before as `.bak`. An
   empty or damaged file is kept as `.broken` and the `.bak` (then the `.tmp`) is read instead. Loadout changes are saved
   a second after the last one, straight away before a mission and when the game closes. A write that fails (a virus

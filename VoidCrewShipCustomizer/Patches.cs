@@ -314,7 +314,8 @@ namespace VoidCrewShipCustomizer
         /// <summary>
         /// Host: a saved CUSTOM run doesn't start while anyone in the room is still without the mod (a player who joined a
         /// moment ago and hasn't loaded yet counts too). The game tries again each frame, so it starts as soon as everyone
-        /// is ready; until then the countdown stays at zero and the chat says why, every few seconds.
+        /// is ready; until then the countdown stays at zero and the chat says why, every few seconds. (Who is missing is only
+        /// listed for that message, not every frame.)
         /// </summary>
         private static bool StartQuestPrefix(Gameplay.Hub.HubQuestManager.SessionStartType startType)
         {
@@ -323,11 +324,11 @@ namespace VoidCrewShipCustomizer
                 if (!PhotonNetwork.IsMasterClient || startType != Gameplay.Hub.HubQuestManager.SessionStartType.Preserved) return true;
                 PreservedGameSession saved = PlayerProfile.Instance.PreservedSession.PreservedSession;
                 if (saved == null || !LoadoutStore.WasCustomRun(saved.GameSessionID)) return true;
-                List<string> missing = RoomSync.PlayersWithoutMod(false);
-                if (missing.Count == 0) return true;
+                if (RoomSync.EveryoneHasMod()) return true;
                 if (UnityEngine.Time.unscaledTime - _lastStartRefusal > 10f)
                 {
                     _lastStartRefusal = UnityEngine.Time.unscaledTime;
+                    List<string> missing = RoomSync.PlayersWithoutMod(false);
                     Notice.Show("The saved CUSTOM run waits for everyone to have Ship Customizer. Not yet: " + string.Join(", ", missing.ToArray()) + ".");
                 }
                 return false;

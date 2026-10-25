@@ -110,7 +110,11 @@ namespace VoidCrewShipCustomizer
         internal sealed class RoomLayout
         {
             public HullConfig Config;
-            /// <summary>The player whose change this is (0 for the host's own), and that player's change number.</summary>
+            /// <summary>
+            /// The player whose change this answers, and that player's change number. 0 when the host shares its loadouts;
+            /// for a change the host made itself, 0 before 0.9.5 and the host's actor number from then on, so the other
+            /// players are told the host changed it (also for a ship's first loadout of its own).
+            /// </summary>
             public int By;
             public int N;
             /// <summary>
@@ -118,6 +122,13 @@ namespace VoidCrewShipCustomizer
             /// player last saw them (described for the player, with who it was).
             /// </summary>
             public List<string> Refused;
+            /// <summary>
+            /// 0.9.5 on: the actor number of the host that shared it (0 from an older host, which leaves it out). After a host
+            /// change the room still holds the old host's loadouts until the new host has shared its own, so players skip the
+            /// ones a former host shared (see <see cref="FromOtherHost"/>). Such a host also says why in each Refused entry
+            /// (someone got there first, the host's settings, one per ship, the other team's ship).
+            /// </summary>
+            public int Host;
         }
 
         /// <summary>A player's change to one of the host's CUSTOM loadouts.</summary>
@@ -185,11 +196,49 @@ namespace VoidCrewShipCustomizer
         private static int _editNumber;
         /// <summary>Other players: the log already says this host's CUSTOM loadouts arrived (once per host and room).</summary>
         private static bool _toldLayoutsArrived;
+        /// <summary>
+        /// Other players: loadouts in the room that aren't used, as last read (a former host's, or one that can't be read),
+        /// so they are passed over without being read again until they change.
+        /// </summary>
+        private static readonly Dictionary<string, string> SkippedLayouts = new Dictionary<string, string>();
+
+        // Kept from one poll to the next, so reading the room (4 times a second) makes no garbage while nothing changes.
+        private static readonly HashSet<string> LayoutsInRoom = new HashSet<string>();
+        private static readonly List<string> LayoutsToRead = new List<string>();
+        private static readonly List<string> LayoutsGone = new List<string>();
+        private static readonly HashSet<int> ActorsInRoom = new HashSet<int>();
+        private static readonly List<int> ActorsGone = new List<int>();
+        private static readonly List<Photon.Realtime.Player> EditingPlayers = new List<Photon.Realtime.Player>();
+        private static readonly List<KeyValuePair<string, RoomEdit>> NewEdits = new List<KeyValuePair<string, RoomEdit>>();
+        private static readonly Comparison<Photon.Realtime.Player> ByActorNumber = (a, b) => a.ActorNumber.CompareTo(b.ActorNumber);
+        private static readonly Comparison<KeyValuePair<string, RoomEdit>> ByEditNumber = (a, b) => a.Value.N.CompareTo(b.Value.N);
+        private static readonly Dictionary<int, Photon.Realtime.Player> NoPlayers = new Dictionary<int, Photon.Realtime.Player>();
+
+        /// <summary>Each player ship's <see cref="CustomKeyOf"/>, made once.</summary>
+        private static readonly string[] CustomKeys = MakeCustomKeys();
+
+        private static string[] MakeCustomKeys()
+        {
+            var keys = new string[CustomLoadouts.MaxShips + 1];
+            for (int ship = 0; ship < keys.Length; ship++) keys[ship] = ship <= 1 ? CustomKey : CustomKey + ship;
+            return keys;
+        }
 
         /// <summary>The room property with a player ship's CUSTOM choice: SC_Custom for ship 1, SC_Custom2 to SC_Custom6 for Fleet's.</summary>
         public static string CustomKeyOf(int ship)
         {
-            return ship <= 1 ? CustomKey : CustomKey + ship;
+            if (ship <= 1) return CustomKey;
+            return ship < CustomKeys.Length ? CustomKeys[ship] : CustomKey + ship;
+        }
+
+        /// <summary>
+        /// The players in the room, read where Photon keeps them: PhotonNetwork.PlayerList copies and sorts them every time.
+        /// Empty outside a room.
+        /// </summary>
+        private static Dictionary<int, Photon.Realtime.Player>.ValueCollection RoomPlayers()
+        {
+            Photon.Realtime.Room room = PhotonNetwork.CurrentRoom;
+            return room != null && room.Players != null ? room.Players.Values : NoPlayers.Values;
         }
 
         /// <summary>Host: a player ship now uses this CUSTOM loadout (not sent again when it is what this host last sent).</summary>
@@ -312,11 +361,13 @@ namespace VoidCrewShipCustomizer
         /// <summary>
         /// Host: shares its CUSTOM loadouts of one ship type: only <paramref name="ship"/>'s when it names the one that
         /// changed, otherwise every player ship's (ships 2 to 6 have none while they follow ship 1's). <paramref name="by"/>
-        /// and <paramref name="n"/> name the player's change this comes from (0 for the host's own).
+        /// and <paramref name="n"/> name the player's change this answers (0 for the host's own). With
+        /// <paramref name="hostChange"/> the host changed it itself, and the other players are told so.
         /// </summary>
-        public static void PublishLayouts(HullInfo hull, int by, int n, int ship = 0, List<string> refused = null)
+        public static void PublishLayouts(HullInfo hull, int by, int n, int ship = 0, List<string> refused = null, bool hostChange = false)
         {
             if (!SharingLayouts) return;
+            int host = PhotonNetwork.LocalPlayer != null ? PhotonNetwork.LocalPlayer.ActorNumber : 0;
             var properties = new Hashtable();
             for (int s = 1; s <= CustomLoadouts.MaxShips; s++)
             {
@@ -328,15 +379,27 @@ namespace VoidCrewShipCustomizer
                 // A ship that follows ship 1 has no layout to share, but the answer to a player's change must still reach
                 // them: then the layout is shared empty, with the change's number and any refusal (their terminal stops
                 // showing the change it sent and follows ship 1 again).
-                properties[LayoutKey(s, hull.ShipGuid)] = layout != null || (s == ship && by != 0) ? LayoutJson(layout, by, n, refusedHere) : null;
+                properties[LayoutKey(s, hull.ShipGuid)] = layout != null || (s == ship && by != 0)
+                    ? LayoutJson(layout, by != 0 ? by : (hostChange ? host : 0), n, refusedHere, host)
+                    : null;
             }
             if (properties.Count > 0) Set(properties);
         }
 
-        private static string LayoutJson(HullConfig config, int by, int n, List<string> refused)
+        private static string LayoutJson(HullConfig config, int by, int n, List<string> refused, int host)
         {
-            var layout = new RoomLayout { Config = config, By = by, N = n, Refused = refused != null && refused.Count > 0 ? refused : null };
+            var layout = new RoomLayout { Config = config, By = by, N = n, Refused = refused != null && refused.Count > 0 ? refused : null, Host = host };
             return JsonConvert.SerializeObject(layout, Formatting.None);
+        }
+
+        /// <summary>
+        /// Other players: whether a shared loadout comes from a former host of the room, so it is skipped (it would show the
+        /// old host's loadout as the new host's, and changes made against it would be refused). One from a host older than
+        /// 0.9.5 doesn't say whose it is and is taken as the host's, as before.
+        /// </summary>
+        internal static bool FromOtherHost(int layoutHost, int roomHost)
+        {
+            return layoutHost != 0 && layoutHost != roomHost;
         }
 
         /// <summary>
@@ -347,9 +410,9 @@ namespace VoidCrewShipCustomizer
         {
             if (_sharedRoom == room || !CustomLoadouts.Available) return;
             bool someoneCanEdit = false;
-            foreach (Photon.Realtime.Player player in PhotonNetwork.PlayerListOthers)
+            foreach (Photon.Realtime.Player player in RoomPlayers())
             {
-                if (ProtocolOf(player) >= SharedProtocol) someoneCanEdit = true;
+                if (player != null && !player.IsLocal && ProtocolOf(player) >= SharedProtocol) someoneCanEdit = true;
             }
             if (!someoneCanEdit) return;
             _sharedRoom = room;
@@ -360,72 +423,114 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>
         /// Host: shares the next ship type's loadouts, one per poll, so reading each ship (the first time) is spread out
-        /// instead of stalling one frame.
+        /// instead of stalling one frame. One that fails is tried again after the others, so players aren't left WAITING
+        /// FOR HOST for that ship type for the rest of the session.
         /// </summary>
         private static void SendNextShare()
         {
             if (SharesToSend.Count == 0 || !SharingLayouts) return;
-            HullInfo hull;
-            if (Catalog.TryGetHull(SharesToSend.Dequeue(), out hull)) PublishLayouts(hull, 0, 0);
+            GUIDUnion guid = SharesToSend.Dequeue();
+            try
+            {
+                HullInfo hull;
+                if (Catalog.TryGetHull(guid, out hull)) PublishLayouts(hull, 0, 0);
+            }
+            catch (Exception e)
+            {
+                SharesToSend.Enqueue(guid);
+                Log.Failure("Sharing your CUSTOM loadouts with the room", e);
+            }
         }
 
-        /// <summary>Host: reads the players' latest changes and saves the new ones, in the order each player made them.</summary>
+        /// <summary>
+        /// Host: reads the players' latest changes and saves the new ones, in the order each player made them (players in
+        /// the order of their actor numbers). Only players with a change not read yet are looked at closely; their properties
+        /// are read where Photon keeps them, so polling makes no garbage while nobody changes anything.
+        /// </summary>
         private static void ApplyEdits(string room)
         {
             Photon.Realtime.Player me = PhotonNetwork.LocalPlayer;
             if (me == null || !CustomLoadouts.Available) return;
-            foreach (Photon.Realtime.Player player in PhotonNetwork.PlayerListOthers)
+            EditingPlayers.Clear();
+            foreach (Photon.Realtime.Player player in RoomPlayers())
             {
-                Hashtable properties = player.CustomProperties;
-                if (properties == null) continue;
-                var edits = new List<KeyValuePair<string, RoomEdit>>();
-                foreach (object rawKey in properties.Keys.ToList())
+                if (player != null && !player.IsLocal && HasNewEdit(player)) EditingPlayers.Add(player);
+            }
+            if (EditingPlayers.Count == 0) return;
+            EditingPlayers.Sort(ByActorNumber);
+            foreach (Photon.Realtime.Player player in EditingPlayers) ApplyEditsOf(player, room, me);
+        }
+
+        /// <summary>Host: whether a player has a change (SC_Edit...) the host hasn't read yet.</summary>
+        private static bool HasNewEdit(Photon.Realtime.Player player)
+        {
+            Hashtable properties = player.CustomProperties;
+            if (properties == null) return false;
+            foreach (System.Collections.DictionaryEntry entry in properties)
+            {
+                var key = entry.Key as string;
+                var json = entry.Value as string;
+                if (key == null || string.IsNullOrEmpty(json) || !key.StartsWith(EditKeyStart, StringComparison.Ordinal)) continue;
+                string seen;
+                if (!SeenEdits.TryGetValue(player.ActorNumber + "/" + key, out seen) || seen != json) return true;
+            }
+            return false;
+        }
+
+        /// <summary>Host: saves one player's new changes, in the order they made them.</summary>
+        private static void ApplyEditsOf(Photon.Realtime.Player player, string room, Photon.Realtime.Player me)
+        {
+            Hashtable properties = player.CustomProperties;
+            if (properties == null) return;
+            NewEdits.Clear();
+            foreach (System.Collections.DictionaryEntry entry in properties)
+            {
+                var key = entry.Key as string;
+                var json = entry.Value as string;
+                if (key == null || string.IsNullOrEmpty(json) || !key.StartsWith(EditKeyStart, StringComparison.Ordinal)) continue;
+                string seenKey = player.ActorNumber + "/" + key;
+                string seen;
+                if (SeenEdits.TryGetValue(seenKey, out seen) && seen == json) continue;
+                SeenEdits[seenKey] = json;
+                if (json.Length > MaxEditLength)
                 {
-                    var key = rawKey as string;
-                    var json = properties[rawKey] as string;
-                    if (key == null || string.IsNullOrEmpty(json) || !key.StartsWith(EditKeyStart, StringComparison.Ordinal)) continue;
-                    string seenKey = player.ActorNumber + "/" + key;
-                    string seen;
-                    if (SeenEdits.TryGetValue(seenKey, out seen) && seen == json) continue;
-                    SeenEdits[seenKey] = json;
-                    if (json.Length > MaxEditLength)
+                    Log.WarnOnce("edit size " + seenKey, "Ignored a change from " + NameOf(player) + ": it is too big to be a CUSTOM loadout.");
+                    continue;
+                }
+                try
+                {
+                    var edit = JsonConvert.DeserializeObject<RoomEdit>(json);
+                    int applied;
+                    if (edit == null || edit.Room != room || edit.To != me.ActorNumber) continue;
+                    if (AppliedEdits.TryGetValue(seenKey, out applied) && edit.N <= applied) continue;
+                    // Void Crew Fleet battle: only a ship's own team may change it (odd ships BLUE, even ships RED).
+                    if (!FleetLink.CanEditShip(player.ActorNumber, edit.Ship))
                     {
-                        Log.WarnOnce("edit size " + seenKey, "Ignored a change from " + NameOf(player) + ": it is too big to be a CUSTOM loadout.");
+                        Log.Info("Ignored " + NameOf(player) + "'s change to ship " + edit.Ship + "'s CUSTOM loadout: it belongs to the other team.");
+                        // Tell the player (their terminal already shows the change), and show them the loadout as it is.
+                        AppliedEdits[seenKey] = edit.N;
+                        CustomLoadouts.RefuseEditAsHost(player.ActorNumber, edit, "that ship belongs to the other team");
                         continue;
                     }
-                    try
-                    {
-                        var edit = JsonConvert.DeserializeObject<RoomEdit>(json);
-                        int applied;
-                        if (edit == null || edit.Room != room || edit.To != me.ActorNumber) continue;
-                        if (AppliedEdits.TryGetValue(seenKey, out applied) && edit.N <= applied) continue;
-                        // Void Crew Fleet battle: only a ship's own team may change it (odd ships BLUE, even ships RED).
-                        if (!FleetLink.CanEditShip(player.ActorNumber, edit.Ship))
-                        {
-                            Log.Info("Ignored " + NameOf(player) + "'s change to ship " + edit.Ship + "'s CUSTOM loadout: it belongs to the other team.");
-                            // Tell the player (their terminal already shows the change), and show them the loadout as it is.
-                            AppliedEdits[seenKey] = edit.N;
-                            CustomLoadouts.RefuseEditAsHost(player.ActorNumber, edit, "that ship belongs to the other team");
-                            continue;
-                        }
-                        edits.Add(new KeyValuePair<string, RoomEdit>(seenKey, edit));
-                    }
-                    catch (Exception e)
-                    {
-                        Log.Failure("Reading a CUSTOM loadout change from " + NameOf(player), e);
-                    }
+                    NewEdits.Add(new KeyValuePair<string, RoomEdit>(seenKey, edit));
                 }
-                foreach (KeyValuePair<string, RoomEdit> edit in edits.OrderBy(e => e.Value.N))
+                catch (Exception e)
                 {
-                    AppliedEdits[edit.Key] = edit.Value.N;
-                    try
-                    {
-                        CustomLoadouts.ApplyEditAsHost(NameOf(player), player.ActorNumber, edit.Value);
-                    }
-                    catch (Exception e)
-                    {
-                        Log.Failure("Saving a CUSTOM loadout change from " + NameOf(player), e);
-                    }
+                    Log.Failure("Reading a CUSTOM loadout change from " + NameOf(player), e);
+                }
+            }
+            if (NewEdits.Count == 0) return;
+            NewEdits.Sort(ByEditNumber);
+            foreach (KeyValuePair<string, RoomEdit> edit in NewEdits)
+            {
+                AppliedEdits[edit.Key] = edit.Value.N;
+                try
+                {
+                    CustomLoadouts.ApplyEditAsHost(NameOf(player), player.ActorNumber, edit.Value);
+                }
+                catch (Exception e)
+                {
+                    Log.Failure("Saving a CUSTOM loadout change from " + NameOf(player), e);
                 }
             }
         }
@@ -504,6 +609,7 @@ namespace VoidCrewShipCustomizer
             SeenEdits.Clear();
             AppliedEdits.Clear();
             SeenLayouts.Clear();
+            SkippedLayouts.Clear();
             SentEdits.Clear();
             _toldLayoutsArrived = false;
         }
@@ -532,64 +638,110 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>
         /// Other players: reads the host's shared CUSTOM loadouts when they change. A loadout that still lacks this
-        /// player's own later change is skipped, so the terminal doesn't jump back while that change is on its way.
+        /// player's own later change is skipped, so the terminal doesn't jump back while that change is on its way. Loadouts
+        /// a former host left in the room are skipped too (see <see cref="FromOtherHost"/>). The room is read 4 times a
+        /// second, so an unchanged loadout is told by its text alone, before anything is parsed.
         /// </summary>
         private static void ReadHostLayouts()
         {
             Hashtable properties = PhotonNetwork.CurrentRoom.CustomProperties;
             if (properties == null) return;
             int me = PhotonNetwork.LocalPlayer != null ? PhotonNetwork.LocalPlayer.ActorNumber : -1;
+            int roomHost = PhotonNetwork.MasterClient != null ? PhotonNetwork.MasterClient.ActorNumber : -1;
             bool fleet = FleetLink.Running;
             bool changed = false;
             // The first read from a host (just joined, or a new host) finds the loadouts as they are, changed by whoever.
             bool firstRead = SeenLayouts.Count == 0;
-            var present = new HashSet<string>();
-            foreach (object rawKey in properties.Keys.ToList())
+            LayoutsInRoom.Clear();
+            LayoutsToRead.Clear();
+            foreach (System.Collections.DictionaryEntry entry in properties)
             {
-                var key = rawKey as string;
+                var key = entry.Key as string;
+                int ship = ShipOfLayoutKey(key);
+                // Ships 2 to 6 are only for Void Crew Fleet; without it running (here and on the host) they are ignored.
+                if (ship == 0 || (ship >= 2 && !fleet)) continue;
+                var json = entry.Value as string;
+                string seen;
+                if (SeenLayouts.TryGetValue(key, out seen) && seen == json) LayoutsInRoom.Add(key);
+                else if (!SkippedLayouts.TryGetValue(key, out seen) || seen != json) LayoutsToRead.Add(key);
+            }
+            foreach (string key in LayoutsToRead)
+            {
+                var json = properties[key] as string;
                 int ship;
                 GUIDUnion hullGuid;
-                // Ships 2 to 6 are only for Void Crew Fleet; without it running (here and on the host) they are ignored.
-                if (!TryParseLayoutKey(key, out ship, out hullGuid) || (ship >= 2 && !fleet)) continue;
-                present.Add(key);
-                var json = properties[rawKey] as string;
-                string seen;
+                if (!TryParseLayoutKey(key, out ship, out hullGuid))
+                {
+                    // Not named after a ship type: passed over until it changes.
+                    SkippedLayouts[key] = json;
+                    continue;
+                }
+                RoomLayout layout;
+                try
+                {
+                    layout = string.IsNullOrEmpty(json) ? null : JsonConvert.DeserializeObject<RoomLayout>(json);
+                }
+                catch (Exception e)
+                {
+                    // Not read again until it changes; what this player sees stays as it was.
+                    SeenLayouts[key] = json;
+                    LayoutsInRoom.Add(key);
+                    Log.Failure("Reading the host's CUSTOM loadouts", e);
+                    continue;
+                }
+                // Until the new host has shared its own, the room still holds a former host's: as if there were none.
+                if (layout != null && FromOtherHost(layout.Host, roomHost))
+                {
+                    SkippedLayouts[key] = json;
+                    continue;
+                }
+                SkippedLayouts.Remove(key);
+                LayoutsInRoom.Add(key);
                 // A loadout read for the first time from this host is how the room has it, not a change someone just made
                 // (unless a player's change is what made it: a ship's first loadout of its own).
-                bool known = SeenLayouts.TryGetValue(key, out seen);
-                if (known && seen == json) continue;
+                bool known = SeenLayouts.ContainsKey(key);
                 SeenLayouts[key] = json;
                 try
                 {
-                    RoomLayout layout = string.IsNullOrEmpty(json) ? null : JsonConvert.DeserializeObject<RoomLayout>(json);
+                    HullConfig config = layout != null && layout.Config != null ? layout.Config.Normalized() : null;
+                    // An answer that changes nothing (a change refused, or made already) is no news for the other players.
+                    bool same = CustomLoadouts.SameLoadout(CustomLoadouts.ConfirmedLayoutOf(ship, hullGuid), config);
                     // What the host has now is what this player's next change is measured against, shown or not.
-                    CustomLoadouts.SetConfirmedLayout(ship, hullGuid, layout != null ? layout.Config : null);
-                    int sent;
+                    CustomLoadouts.SetConfirmedLayout(ship, hullGuid, config);
+                    int sent = 0;
                     bool mine = layout != null && layout.By == me;
-                    if (mine && SentEdits.TryGetValue(key, out sent))
+                    bool answer = mine && SentEdits.TryGetValue(key, out sent);
+                    if (answer)
                     {
                         if (layout.N < sent) continue;
                         // The host has answered this player's latest change here: it needn't be sent to everyone who joins.
                         ClearOwnEdit(key);
                     }
-                    CustomLoadouts.SetHostLayout(ship, hullGuid, layout != null ? layout.Config : null);
-                    changed = true;
+                    // Another player's answer that changes nothing at the host leaves what this player sees as it is: a change
+                    // of theirs still on its way stays in sight.
+                    if ((mine || !same) && CustomLoadouts.SetHostLayout(ship, hullGuid, config)) changed = true;
                     if (layout == null) continue;
                     if (ship == 1 && !_toldLayoutsArrived)
                     {
                         _toldLayoutsArrived = true;
                         Log.Info("The host shares its CUSTOM loadouts: what you change at the loadout terminal goes to the host, who saves it, and every player sees it.");
                     }
-                    if (mine && layout.Refused != null && layout.Refused.Count > 0) TerminalUi.Toast(RefusedMessage(layout.Refused));
-                    // (An empty layout only carries a refusal for its player: nothing changed.)
-                    else if (!mine && (known || (layout.By != 0 && !firstRead)) && layout.Config != null) CustomLoadouts.OnChangedByOther(NameOfActor(layout.By), ship, hullGuid);
+                    // A refusal is for the player whose change it answers, when the answer arrives (never again later: after a
+                    // host change the old host's answers can still be in the room).
+                    if (answer && layout.Refused != null && layout.Refused.Count > 0) TerminalUi.Toast(RefusedMessage(layout.Refused, layout.Host != 0));
+                    else if (Announces(mine, known, firstRead, layout.By, config != null, same)) CustomLoadouts.OnChangedByOther(NameOfActor(layout.By), ship, hullGuid);
                 }
                 catch (Exception e)
                 {
                     Log.Failure("Reading the host's CUSTOM loadouts", e);
                 }
             }
-            foreach (string key in SeenLayouts.Keys.Where(k => !present.Contains(k)).ToList())
+            LayoutsGone.Clear();
+            foreach (string key in SeenLayouts.Keys)
+            {
+                if (!LayoutsInRoom.Contains(key)) LayoutsGone.Add(key);
+            }
+            foreach (string key in LayoutsGone)
             {
                 SeenLayouts.Remove(key);
                 int ship;
@@ -597,19 +749,38 @@ namespace VoidCrewShipCustomizer
                 if (!TryParseLayoutKey(key, out ship, out hullGuid)) continue;
                 // Gone from the room (the ship follows ship 1 again): the next change is measured against that.
                 CustomLoadouts.SetConfirmedLayout(ship, hullGuid, null);
-                CustomLoadouts.SetHostLayout(ship, hullGuid, null);
-                changed = true;
+                if (CustomLoadouts.SetHostLayout(ship, hullGuid, null)) changed = true;
             }
             if (changed) TerminalUi.OnLoadoutChangedRemotely();
         }
 
+        /// <summary>
+        /// Whether a shared loadout read from the room is news to tell this player about ("NAME changed CUSTOM ..."): not
+        /// their own change, a loadout with something in it that really changed, and either one already read from this host
+        /// or a ship's first loadout of its own made by someone's change (not the host's loadouts as they are when first
+        /// read: after joining, after a new host, or as the host starts sharing them).
+        /// </summary>
+        internal static bool Announces(bool mine, bool known, bool firstRead, int by, bool hasLoadout, bool unchanged)
+        {
+            return !mine && hasLoadout && !unchanged && (known || (by != 0 && !firstRead));
+        }
+
+        /// <summary>
+        /// The player ship of a room property named like a shared loadout (SC_Layout1_ to SC_Layout6_ and a ship type), or
+        /// 0 for any other property. Read from the name in place, without copying it.
+        /// </summary>
+        private static int ShipOfLayoutKey(string key)
+        {
+            if (key == null || key.Length < LayoutKeyStart.Length + 3 || !key.StartsWith(LayoutKeyStart, StringComparison.Ordinal) || key[LayoutKeyStart.Length + 1] != '_') return 0;
+            int ship = key[LayoutKeyStart.Length] - '0';
+            return ship >= 1 && ship <= CustomLoadouts.MaxShips ? ship : 0;
+        }
+
         private static bool TryParseLayoutKey(string key, out int ship, out GUIDUnion hullGuid)
         {
-            ship = 0;
             hullGuid = GUIDUnion.Empty();
-            if (key == null || key.Length < LayoutKeyStart.Length + 3 || !key.StartsWith(LayoutKeyStart, StringComparison.Ordinal)) return false;
-            ship = key[LayoutKeyStart.Length] - '0';
-            if (ship < 1 || ship > CustomLoadouts.MaxShips || key[LayoutKeyStart.Length + 1] != '_') return false;
+            ship = ShipOfLayoutKey(key);
+            if (ship == 0) return false;
             try
             {
                 hullGuid = new GUIDUnion(key.Substring(LayoutKeyStart.Length + 2));
@@ -652,15 +823,39 @@ namespace VoidCrewShipCustomizer
         {
             var missing = new List<string>();
             if (!PhotonNetwork.InRoom) return missing;
+            // In actor-number order, for the messages that name them.
             foreach (Photon.Realtime.Player player in PhotonNetwork.PlayerList)
             {
-                if (player == null || player.IsLocal) continue;
-                if (ProtocolOf(player) >= protocol) continue;
-                float seen;
-                if (giveJoinersTime && FirstSeen.TryGetValue(player.ActorNumber, out seen) && Time.unscaledTime - seen < JoinGraceSeconds) continue;
-                missing.Add(NameOf(player));
+                if (IsOlderThan(player, protocol, giveJoinersTime)) missing.Add(NameOf(player));
             }
             return missing;
+        }
+
+        /// <summary>Whether anyone else in the room is older than that protocol (or without the mod), without making a list.</summary>
+        private static bool AnyPlayerOlderThan(int protocol, bool giveJoinersTime)
+        {
+            if (!PhotonNetwork.InRoom) return false;
+            foreach (Photon.Realtime.Player player in RoomPlayers())
+            {
+                if (IsOlderThan(player, protocol, giveJoinersTime)) return true;
+            }
+            return false;
+        }
+
+        private static bool IsOlderThan(Photon.Realtime.Player player, int protocol, bool giveJoinersTime)
+        {
+            if (player == null || player.IsLocal || ProtocolOf(player) >= protocol) return false;
+            float seen;
+            return !(giveJoinersTime && FirstSeen.TryGetValue(player.ActorNumber, out seen) && Time.unscaledTime - seen < JoinGraceSeconds);
+        }
+
+        /// <summary>
+        /// Whether everyone else in the room has the mod, without making a list of names: asked every frame while a saved
+        /// CUSTOM run waits to start (see <see cref="PlayersWithoutMod"/> for who is missing).
+        /// </summary>
+        public static bool EveryoneHasMod()
+        {
+            return !AnyPlayerOlderThan(OldestProtocol, false);
         }
 
         /// <summary>A player other than the host: whether the host's Ship Customizer knows ships 3 to 6 (0.9.0 on).</summary>
@@ -685,12 +880,9 @@ namespace VoidCrewShipCustomizer
         /// <summary>Whether the player with this actor number has the mod (this player always does).</summary>
         public static bool PlayerHasMod(int actorNumber)
         {
-            if (!PhotonNetwork.InRoom) return false;
-            foreach (Photon.Realtime.Player player in PhotonNetwork.PlayerList)
-            {
-                if (player != null && player.ActorNumber == actorNumber) return player.IsLocal || ProtocolOf(player) >= OldestProtocol;
-            }
-            return false;
+            if (!PhotonNetwork.InRoom || PhotonNetwork.CurrentRoom == null) return false;
+            Photon.Realtime.Player player = PhotonNetwork.CurrentRoom.GetPlayer(actorNumber);
+            return player != null && (player.IsLocal || ProtocolOf(player) >= OldestProtocol);
         }
 
         /// <summary>
@@ -720,40 +912,48 @@ namespace VoidCrewShipCustomizer
             return player != null && player.CustomProperties != null && player.CustomProperties.TryGetValue(PlayerKey, out value) && value is int ? (int)value : 0;
         }
 
-        /// <summary>A message for a player whose change was partly or wholly not made.</summary>
-        private static string RefusedMessage(List<string> refused)
+        /// <summary>
+        /// A message for a player whose change was partly or wholly not made. A host on 0.9.5 or newer
+        /// (<paramref name="reasonsGiven"/>) says why for each part (someone got there first, the host's settings, one per
+        /// ship, the other team's ship); an older host only names who got there first, so its parts are introduced that way.
+        /// </summary>
+        internal static string RefusedMessage(List<string> refused, bool reasonsGiven)
         {
+            if (reasonsGiven) return "Not changed: " + string.Join("; ", refused.ToArray()) + ". You see the loadout as it is now.";
             return "Not changed, because someone else changed it just before you: " + string.Join(", ", refused.ToArray()) + ". You see their choice now.";
         }
 
-        /// <summary>A player's name by actor number; the host's own changes are made under 0.</summary>
+        /// <summary>A player's name by actor number; changes shared under 0 are the host's.</summary>
         public static string NameOfActor(int actor)
         {
-            if (!PhotonNetwork.InRoom) return "someone";
-            Photon.Realtime.Player player = actor == 0 ? PhotonNetwork.MasterClient : PhotonNetwork.PlayerList.FirstOrDefault(p => p != null && p.ActorNumber == actor);
+            if (!PhotonNetwork.InRoom || PhotonNetwork.CurrentRoom == null) return "someone";
+            Photon.Realtime.Player player = actor == 0 ? PhotonNetwork.MasterClient : PhotonNetwork.CurrentRoom.GetPlayer(actor);
             return player != null ? NameOf(player) : "someone";
         }
 
-        private static string NameOf(Photon.Realtime.Player player)
+        /// <summary>A player's name in messages: their nickname, or "player" and their number when they have none.</summary>
+        internal static string NameOf(Photon.Realtime.Player player)
         {
             return string.IsNullOrEmpty(player.NickName) ? "player " + player.ActorNumber : player.NickName;
         }
 
         private static void TrackPlayers()
         {
-            var present = new HashSet<int>();
-            foreach (Photon.Realtime.Player player in PhotonNetwork.PlayerList)
+            ActorsInRoom.Clear();
+            foreach (Photon.Realtime.Player player in RoomPlayers())
             {
                 if (player == null) continue;
-                present.Add(player.ActorNumber);
+                ActorsInRoom.Add(player.ActorNumber);
                 if (!FirstSeen.ContainsKey(player.ActorNumber)) FirstSeen[player.ActorNumber] = Time.unscaledTime;
             }
-            var gone = new List<int>();
+            // Everyone in the room is in FirstSeen now: as many entries means nobody left.
+            if (FirstSeen.Count == ActorsInRoom.Count) return;
+            ActorsGone.Clear();
             foreach (int actor in FirstSeen.Keys)
             {
-                if (!present.Contains(actor)) gone.Add(actor);
+                if (!ActorsInRoom.Contains(actor)) ActorsGone.Add(actor);
             }
-            foreach (int actor in gone) FirstSeen.Remove(actor);
+            foreach (int actor in ActorsGone) FirstSeen.Remove(actor);
         }
 
         /// <summary>Tells the room this player has the mod (again after a few seconds if it didn't stick).</summary>
@@ -829,15 +1029,18 @@ namespace VoidCrewShipCustomizer
             if (host != _wasHost || hostActor != _hostActor)
             {
                 // A new host (this player, or another one) shares its own CUSTOM loadouts and choices; whatever was shared,
-                // sent or read before is forgotten and read again from the new host.
+                // sent or read before is forgotten and read again from the new host. Changes still waiting for the old host
+                // are taken back: the new host never takes them.
                 _wasHost = host;
                 _hostActor = hostActor;
+                ClearOwnEdits();
                 ForgetShared();
                 Array.Clear(LastCustomJson, 0, LastCustomJson.Length);
                 Array.Clear(PublishedCustom, 0, PublishedCustom.Length);
                 _fleetFlagSentAt = -100f;
                 CustomLoadouts.ForgetHostLayouts();
                 TerminalUi.OnLoadoutChangedRemotely();
+                if (host) ShareChoicesAsNewHost();
             }
 
             if (host) PublishFleetFlag();
@@ -851,10 +1054,32 @@ namespace VoidCrewShipCustomizer
 
             if (host)
             {
-                ShareLayoutsWhenNeeded(room);
-                SendNextShare();
-                ApplyEdits(room);
-                EnforceEveryoneHasMod();
+                // Each on its own: one going wrong must not stop the others, above all the check that everyone has the mod.
+                try
+                {
+                    ShareLayoutsWhenNeeded(room);
+                    SendNextShare();
+                }
+                catch (Exception e)
+                {
+                    Log.Failure("Sharing your CUSTOM loadouts with the room", e);
+                }
+                try
+                {
+                    ApplyEdits(room);
+                }
+                catch (Exception e)
+                {
+                    Log.Failure("Saving the other players' CUSTOM loadout changes", e);
+                }
+                try
+                {
+                    EnforceEveryoneHasMod();
+                }
+                catch (Exception e)
+                {
+                    Log.Failure("Checking that everyone in the room has Ship Customizer", e);
+                }
                 return;
             }
 
@@ -870,6 +1095,21 @@ namespace VoidCrewShipCustomizer
                 if (json == LastCustomJson[ship]) continue;
                 LastCustomJson[ship] = json;
                 ApplyHostCustom(json, ship);
+            }
+        }
+
+        /// <summary>
+        /// This player just became the room's host. The room's CUSTOM choices (SC_Custom to SC_Custom6) still carry the old
+        /// host's loadouts, and nothing would send them again before this host changes one: they are shared again from this
+        /// host's own loadouts (which a CUSTOM mission starts with), and a choice this host doesn't have is taken out.
+        /// </summary>
+        private static void ShareChoicesAsNewHost()
+        {
+            CustomLoadouts.ShareChoicesAgain();
+            for (int ship = 1; ship <= CustomLoadouts.MaxShips; ship++)
+            {
+                object value;
+                if (CustomLoadouts.ActiveShipOf(ship).IsNull && TryGet(CustomKeyOf(ship), out value) && value != null) ClearCustom(ship);
             }
         }
 
@@ -893,21 +1133,28 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         private static void EnforceEveryoneHasMod()
         {
-            List<int> otherShips = Enumerable.Range(2, CustomLoadouts.MaxShips - 1).Where(s => !CustomLoadouts.ActiveShipOf(s).IsNull).ToList();
-            if (!CustomLoadouts.IsActive && otherShips.Count == 0 && !SavedCustomRunSelected()) return;
-            List<string> missing = PlayersWithoutMod(true);
-            if (missing.Count == 0)
+            // Asked 4 times a second: nothing is listed while everything is in order.
+            bool otherShipCustom = false, manyShipsCustom = false;
+            for (int s = 2; s <= CustomLoadouts.MaxShips; s++)
+            {
+                if (CustomLoadouts.ActiveShipOf(s).IsNull) continue;
+                otherShipCustom = true;
+                if (s >= 3) manyShipsCustom = true;
+            }
+            if (!CustomLoadouts.IsActive && !otherShipCustom && !SavedCustomRunSelected()) return;
+            if (!AnyPlayerOlderThan(OldestProtocol, true))
             {
                 // Ships 3 to 6 also need everyone on 0.9.0 or newer (older players can't see their CUSTOM loadouts).
-                List<int> manyShips = otherShips.Where(s => s >= 3).ToList();
-                if (manyShips.Count == 0) return;
+                if (!manyShipsCustom || !AnyPlayerOlderThan(ManyShipsProtocol, true)) return;
+                List<int> manyShips = ShipsUsingCustom(3);
                 List<string> older = PlayersWithoutManyShips(true);
-                if (older.Count == 0) return;
                 CancelShips(manyShips);
                 PublishNotice("CUSTOM was switched off on " + ShipNames(manyShips) + ": " + string.Join(", ", older.ToArray()) +
                               " joined with a Ship Customizer older than 0.9.0, and ships 3 to 6 need it.", true);
                 return;
             }
+            List<int> otherShips = ShipsUsingCustom(2);
+            List<string> missing = PlayersWithoutMod(true);
             string who = string.Join(", ", missing.ToArray());
             // One message with every line: each new message replaces the one before.
             var notices = new List<string>();
@@ -936,6 +1183,17 @@ namespace VoidCrewShipCustomizer
                 notices.Add("The saved CUSTOM run was unselected: " + who + " joined without Ship Customizer.");
             }
             if (notices.Count > 0) PublishNotice(string.Join("\n", notices.ToArray()), true);
+        }
+
+        /// <summary>Host: Void Crew Fleet's ships from this one to ship 6 that use a CUSTOM loadout.</summary>
+        private static List<int> ShipsUsingCustom(int from)
+        {
+            var ships = new List<int>();
+            for (int s = from; s <= CustomLoadouts.MaxShips; s++)
+            {
+                if (!CustomLoadouts.ActiveShipOf(s).IsNull) ships.Add(s);
+            }
+            return ships;
         }
 
         /// <summary>Host: Void Crew Fleet's ships lose their CUSTOM loadout (Fleet gives them CUSTOM's stand-in).</summary>
@@ -991,7 +1249,8 @@ namespace VoidCrewShipCustomizer
                     if (Catalog.ShipGuids().Contains(guid) && Catalog.TryGetHull(guid, out hull) && CustomLoadouts.TryGetDef(guid, out def))
                     {
                         hullGuid = guid;
-                        config = custom.Config ?? new HullConfig();
+                        // In the shape this player's own loadouts have (as the shared loadouts are when read).
+                        config = (custom.Config ?? new HullConfig()).Normalized();
                     }
                     else
                     {

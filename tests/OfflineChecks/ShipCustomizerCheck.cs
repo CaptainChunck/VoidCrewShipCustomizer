@@ -599,6 +599,7 @@ internal static class Program
 
         MatchRuleChecks(plugin, config, hullInfo);
         SharedEditingChecks(plugin, config, sockets);
+        HostAnswerChecks(plugin, config, sockets);
         TerminalSyncChecks(plugin);
         ShareCodeChecks(plugin, config);
         SaveFileChecks(plugin, config);
@@ -956,6 +957,171 @@ internal static class Program
         Check(refusedBack != null && refusedBack.Count == 1 && refusedBack[0] == "STORAGE RACK 1 slot 1 (Ana)", "the host's answer says what was refused and who changed it first");
         object older = deserialize.Invoke(null, new object[] { "{\"Room\":\"r\",\"N\":2,\"Hull\":\"x\",\"Ship\":1,\"Config\":{}}", editType });
         Check(editType.GetField("Base").GetValue(older) == null, "a change from 0.7.0 or older has no Base (the host takes it whole, as before)");
+    }
+
+    // ------------------------------------------------------------------ 0.9.5: the host's answers, and a new host
+
+    private static void HostAnswerChecks(Assembly plugin, Type config, IList sockets)
+    {
+        Console.WriteLine("Changes the host's settings don't allow, and changes taken back:");
+        Type merge = plugin.GetType("VoidCrewShipCustomizer.LayoutMerge", true);
+        MethodInfo mergeMethod = merge.GetMethod("Merge");
+        MethodInfo dropped = merge.GetMethod("Dropped");
+        var racks = new Dictionary<int, int> { { 12, 3 } };
+        Func<object> layout = () =>
+        {
+            object c = Activator.CreateInstance(config);
+            ((IDictionary)config.GetField("Slots").GetValue(c))[1] = "m:11111111111111111111111111111111";
+            ((IDictionary)config.GetField("Storage").GetValue(c))[12] = new List<string> { "i:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "", "" };
+            config.GetMethod("Normalized").Invoke(c, null);
+            return c;
+        };
+        Func<object, object> clone = c => config.GetMethod("Clone").Invoke(c, null);
+        Func<object, IDictionary> slotsOf = c => (IDictionary)config.GetField("Slots").GetValue(c);
+        Func<object, IDictionary> contentsOf = c => (IDictionary)config.GetField("Contents").GetValue(c);
+        Func<object, List<string>> rackOf = c => (List<string>)((IDictionary)config.GetField("Storage").GetValue(c))[12];
+        // Merge(current, seen, wanted, apply, sockets, racks, ownChange, applied, refused).
+        Func<object, object, object, object, Func<string, bool>, List<string>, List<string>, object> run = (current, seen, wanted, apply, mine, applied, refused) =>
+            mergeMethod.Invoke(null, new[] { current, seen, wanted, apply, sockets, racks, mine, applied, refused });
+
+        // The host has AnyItemOnAnyRack off, the player on: their item for rack slots 1 and 2 doesn't pass the host's checks.
+        object seen = layout();
+        object current = clone(seen);
+        object wanted = clone(seen);
+        rackOf(wanted)[0] = "i:ffffffffffffffffffffffffffffffff";
+        rackOf(wanted)[1] = "i:ffffffffffffffffffffffffffffffff";
+        object checkedWanted = clone(wanted);
+        rackOf(checkedWanted)[0] = "";
+        rackOf(checkedWanted)[1] = "";
+        var applied = new List<string>();
+        var refused = new List<string>();
+        object merged = run(current, seen, wanted, checkedWanted, null, applied, refused);
+        Check(rackOf(merged)[0] == "i:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" && rackOf(merged)[1] == "" && applied.Count == 0 && refused.Count == 2 &&
+              refused.Contains("rack:12:0") && refused.Contains("rack:12:1"),
+            "an item the host's settings don't allow in a rack slot is refused, and the slot keeps what it had (before, it was emptied for everyone)");
+
+        // The host has AllowAnySize off, the player on: their module across the whole 2x1 hardpoint doesn't pass.
+        current = clone(seen);
+        wanted = clone(seen);
+        slotsOf(wanted).Remove(1);
+        slotsOf(wanted)[0] = "m:33333333333333333333333333333333";
+        checkedWanted = clone(wanted);
+        slotsOf(checkedWanted).Remove(0);
+        applied.Clear();
+        refused.Clear();
+        merged = run(current, seen, wanted, checkedWanted, null, applied, refused);
+        Check(slotsOf(merged).Count == 1 && (string)slotsOf(merged)[1] == "m:11111111111111111111111111111111" && applied.Count == 0 && refused.Count == 1 && refused[0] == "hp:0",
+            "a module the host's settings don't allow on a hardpoint is refused, and the hardpoint keeps its module (before, it was emptied)");
+
+        Func<object, object, string, bool> drops = (w, a, part) => (bool)dropped.Invoke(null, new[] { w, a, sockets, part });
+        object picked = clone(seen);
+        rackOf(picked)[2] = "i:ABCDEF0123456789ABCDEF0123456789";
+        object rewritten = clone(picked);
+        rackOf(rewritten)[2] = "i:abcdef0123456789abcdef0123456789";
+        Check(!drops(picked, rewritten, "rack:12:2"), "a code the host's checks only write differently isn't taken for a refusal");
+        object loaded = clone(seen);
+        contentsOf(loaded)[1] = new List<string> { "i:cccccccccccccccccccccccccccccccc", "" };
+        object unloaded = clone(loaded);
+        contentsOf(unloaded)[1] = new List<string> { "", "" };
+        Check(drops(loaded, unloaded, "hp:0") && !drops(loaded, clone(loaded), "hp:0"), "an item for a module's slot that the host's checks take out counts too");
+        object blessed = clone(seen);
+        config.GetField("Homunculus").SetValue(blessed, "i:dddddddddddddddddddddddddddddddd");
+        object standard = clone(blessed);
+        config.GetField("Homunculus").SetValue(standard, "");
+        object rich = clone(seen);
+        config.GetField("Alloys").SetValue(rich, 5000);
+        object capped = clone(rich);
+        config.GetField("Alloys").SetValue(capped, 1000);
+        Check(drops(blessed, standard, "homunculus") && !drops(rich, capped, "alloys"), "a homunculus taken out counts; alloys only kept in range don't");
+
+        // A player changes rack slot 1 from a to b, and back to a before the host's answer to the first change came back: the
+        // second change reads as leaving the slot alone (Merge), and TakeBack puts it back.
+        MethodInfo takeBack = merge.GetMethod("TakeBack");
+        seen = layout();
+        current = clone(seen);
+        rackOf(current)[0] = "i:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        wanted = clone(seen);
+        applied.Clear();
+        refused.Clear();
+        merged = run(current, seen, wanted, wanted, part => part == "rack:12:0", applied, refused);
+        bool leftAlone = rackOf(merged)[0] == "i:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" && applied.Count == 0;
+        Func<string, bool> sameView = part => part == "rack:12:0";
+        takeBack.Invoke(null, new[] { current, seen, wanted, wanted, sockets, racks, sameView, merged, applied, refused });
+        Check(leftAlone && rackOf(merged)[0] == "i:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" && applied.Count == 1 && applied[0] == "rack:12:0" && refused.Count == 0,
+            "a part changed and changed back at once ends as the player's terminal shows it (before, it stayed on the first change)");
+        applied.Clear();
+        refused.Clear();
+        merged = run(current, seen, wanted, wanted, null, applied, refused);
+        Func<string, bool> otherView = part => false;
+        takeBack.Invoke(null, new[] { current, seen, wanted, wanted, sockets, racks, otherView, merged, applied, refused });
+        Check(rackOf(merged)[0] == "i:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" && applied.Count == 0 && refused.Count == 0,
+            "not when someone else made that change, or another of the host's loadouts reached the player in between (their change may not have been in sight)");
+
+        Type custom = plugin.GetType("VoidCrewShipCustomizer.CustomLoadouts", true);
+        Type sync = plugin.GetType("VoidCrewShipCustomizer.RoomSync", true);
+        MethodInfo partName = custom.GetMethod("PartName");
+        object hull = Activator.CreateInstance(plugin.GetType("VoidCrewShipCustomizer.HullInfo", true));
+        Check((string)partName.Invoke(null, new[] { hull, (object)"hp:2" }) == "HARDPOINT 3" && (string)partName.Invoke(null, new[] { hull, (object)"rack:99:0" }) == "a storage rack slot 1",
+            "parts are named for messages: HARDPOINT 3, a rack's slot");
+        MethodInfo isHardpoint = merge.GetMethod("IsHardpoint");
+        MethodInfo isRackSlot = merge.GetMethod("IsRackSlot");
+        var hardpoint = new object[] { "hp:12", null };
+        var rackSlot = new object[] { "rack:12:4", null, null };
+        Check((bool)isHardpoint.Invoke(null, hardpoint) && (int)hardpoint[1] == 12 && !(bool)isHardpoint.Invoke(null, new object[] { "hp:-1", null }) &&
+              !(bool)isHardpoint.Invoke(null, new object[] { "homunculus", null }) && (bool)isRackSlot.Invoke(null, rackSlot) && (int)rackSlot[1] == 12 &&
+              (int)rackSlot[2] == 4 && !(bool)isRackSlot.Invoke(null, new object[] { "rack:12", null, null }),
+            "part names are read the same whatever the PC's language settings (\"hp:12\", \"rack:12:4\")");
+
+        Console.WriteLine("Messages when a change isn't made:");
+        MethodInfo refusedMessage = sync.GetMethod("RefusedMessage", BindingFlags.NonPublic | BindingFlags.Static);
+        var parts = new List<string> { "HARDPOINT 3 (Ana got there first)", "STORAGE RACK 1 slot 2 (not allowed by the host's settings)" };
+        string told = (string)refusedMessage.Invoke(null, new object[] { parts, true });
+        Check(told == "Not changed: HARDPOINT 3 (Ana got there first); STORAGE RACK 1 slot 2 (not allowed by the host's settings). You see the loadout as it is now.",
+            "with a host on 0.9.5 or newer each part says why it wasn't made, without assuming someone else got there first (\"" + told + "\")");
+        string toldBefore = (string)refusedMessage.Invoke(null, new object[] { new List<string> { "HARDPOINT 3 (Ana)" }, false });
+        Check(toldBefore == "Not changed, because someone else changed it just before you: HARDPOINT 3 (Ana). You see their choice now.",
+            "an older host's answer reads as it did");
+        Check((string)custom.GetField("NotAllowedByHost", BindingFlags.NonPublic | BindingFlags.Static).GetValue(null) == "not allowed by the host's settings",
+            "a refusal by the host's settings says so");
+
+        Console.WriteLine("Telling players who changed a loadout:");
+        MethodInfo sameMethod = custom.GetMethod("SameLoadout", BindingFlags.NonPublic | BindingFlags.Static);
+        Func<object, object, bool> same = (a, b) => (bool)sameMethod.Invoke(null, new[] { a, b });
+        object one = layout();
+        object other = clone(one);
+        config.GetField("Alloys").SetValue(other, 750);
+        object spare = clone(one);
+        slotsOf(spare)[5] = "";
+        config.GetMethod("Normalized").Invoke(spare, null);
+        Check(same(one, clone(one)) && same(one, spare) && !same(one, other) && same(null, null) && !same(one, null),
+            "two loadouts are the same part for part (an empty entry a loadout drops when normalized doesn't count)");
+        MethodInfo announces = sync.GetMethod("Announces", BindingFlags.NonPublic | BindingFlags.Static);
+        // Announces(mine, known, firstRead, by, hasLoadout, unchanged)
+        Func<bool, bool, bool, int, bool, bool, bool> tells = (own, known, firstRead, by, hasLoadout, unchanged) =>
+            (bool)announces.Invoke(null, new object[] { own, known, firstRead, by, hasLoadout, unchanged });
+        Check(tells(false, true, false, 4, true, false), "another player's change to a loadout already read is told");
+        Check(!tells(false, true, false, 4, true, true),
+            "the host's answer to a change that changed nothing (refused, or the same again) isn't told to everyone as that player's change");
+        Check(!tells(true, true, false, 4, true, false) && !tells(false, false, true, 4, true, false) && !tells(false, true, false, 4, false, false),
+            "nor a player's own change, nor what the first read after joining or a new host finds, nor a ship going back to ship 1's");
+        Check(tells(false, false, false, 7, true, false) && !tells(false, false, false, 0, true, false),
+            "a ship's first loadout of its own is told when a change made it (the host's own changes name the host now), not as the host shares its loadouts");
+
+        Console.WriteLine("A new host:");
+        MethodInfo fromOtherHost = sync.GetMethod("FromOtherHost", BindingFlags.NonPublic | BindingFlags.Static);
+        Func<int, int, bool> skipped = (layoutHost, roomHost) => (bool)fromOtherHost.Invoke(null, new object[] { layoutHost, roomHost });
+        Check(skipped(3, 5) && !skipped(5, 5), "a loadout a former host left in the room is skipped until the new host has shared its own");
+        Check(!skipped(0, 5), "a loadout from a host older than 0.9.5 (it doesn't say whose it is) is taken as the host's, as before");
+        Type json = System.Type.GetType("Newtonsoft.Json.JsonConvert, Newtonsoft.Json", true);
+        MethodInfo serialize = json.GetMethod("SerializeObject", new[] { typeof(object) });
+        MethodInfo deserialize = json.GetMethod("DeserializeObject", new[] { typeof(string), typeof(Type) });
+        Type layoutType = plugin.GetType("VoidCrewShipCustomizer.RoomSync+RoomLayout", true);
+        object shared = Activator.CreateInstance(layoutType);
+        layoutType.GetField("Host").SetValue(shared, 5);
+        object sharedBack = deserialize.Invoke(null, new object[] { (string)serialize.Invoke(null, new[] { shared }), layoutType });
+        object fromOlderHost = deserialize.Invoke(null, new object[] { "{\"Config\":{},\"By\":0,\"N\":0}", layoutType });
+        Check((int)layoutType.GetField("Host").GetValue(sharedBack) == 5 && (int)layoutType.GetField("Host").GetValue(fromOlderHost) == 0,
+            "a shared loadout names the host that shared it; one from an older host reads as naming none");
     }
 
     // ------------------------------------------------------------------ 0.8.0: share codes

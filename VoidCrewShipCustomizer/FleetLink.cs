@@ -182,9 +182,24 @@ namespace VoidCrewShipCustomizer
             _shipColor = shipColor;
             _isTeamMatch = isTeamMatch.GetGetMethod();
             // Who may change which ship can change at any moment in the hub: redraw the terminal when it does.
-            EventInfo changed = api.GetEvent("TeamsChanged", BindingFlags.Public | BindingFlags.Static);
-            if (changed != null) changed.AddEventHandler(null, (Action)OnTeamsChanged);
+            Listen(api, "TeamsChanged", OnTeamsChanged);
             Log.Info("Void Crew Fleet found: in a Fleet Battle, only a ship's own team can change its CUSTOM loadout.");
+        }
+
+        /// <summary>
+        /// Subscribes to one of Fleet's events, when it is there and an Action: a Fleet that changed it to another kind would
+        /// otherwise make the subscription throw and leave the rest of its API unlinked.
+        /// </summary>
+        private static void Listen(Type api, string name, Action handler)
+        {
+            EventInfo info = api.GetEvent(name, BindingFlags.Public | BindingFlags.Static);
+            if (info == null) return;
+            if (info.EventHandlerType != typeof(Action))
+            {
+                Log.Warn("Void Crew Fleet's " + name + " isn't the kind of event Ship Customizer knows, so it isn't followed.");
+                return;
+            }
+            info.AddEventHandler(null, handler);
         }
 
         /// <summary>
@@ -207,8 +222,7 @@ namespace VoidCrewShipCustomizer
             _fabricatorMaxLevel = fabricator;
             _maxStartAlloys = alloys;
             _rulesActive = active;
-            EventInfo changed = api.GetEvent("ShipRulesChanged", BindingFlags.Public | BindingFlags.Static);
-            if (changed != null) changed.AddEventHandler(null, (Action)OnRulesChanged);
+            Listen(api, "ShipRulesChanged", OnRulesChanged);
             Log.Info("Void Crew Fleet's match rules are linked: in a Fleet Battle, CUSTOM ships keep to them.");
         }
 
@@ -225,8 +239,7 @@ namespace VoidCrewShipCustomizer
             _hullOfShip = hull != null && hull.ReturnType == typeof(GUIDUnion) ? hull : null;
             _shipName = name != null && name.ReturnType == typeof(string) ? name : null;
             _shipCount = count;
-            EventInfo changed = api.GetEvent("ShipsChanged", BindingFlags.Public | BindingFlags.Static);
-            if (changed != null && changed.EventHandlerType == typeof(Action)) changed.AddEventHandler(null, (Action)OnShipsChanged);
+            Listen(api, "ShipsChanged", OnShipsChanged);
             Log.Info("Void Crew Fleet knows ships 3 to 6: every player ship it adds can use CUSTOM.");
         }
 
