@@ -1864,12 +1864,14 @@ namespace VoidCrewShipCustomizer
             if (_refreshingPicker)
             {
                 // Made again after another player's change: the same list (same title) is filled in again where it is, with
-                // its tab and scroll kept. A list about something else now (another module in that hardpoint) closes. A pick
-                // is still checked against the loadout as it was when the list opened (see Edit): a part someone else changed
-                // meanwhile is refused with who it was, as before (the first change wins).
+                // its tab and scroll kept. A list about something else now (another module in that hardpoint) closes. From
+                // now on a pick is checked against the loadout this list shows (see Edit): the player sees the other change
+                // and picks knowing it. A change that comes after the list was filled in is still refused with who made it,
+                // as before (the first change wins), and so is a click on its way while the rows changed (PickerPanel).
                 if (_picker == null || !_picker.IsOpen || title != _pickerTitle) return;
                 _pickerRefreshed = true;
                 _picker.Refresh(subtitle, entries);
+                _pickerSeen = _shownHull != null ? CustomLoadouts.ConfigToShow(_shownHull).Clone() : null;
                 return;
             }
             if (closeOthers) CloseOverlays();

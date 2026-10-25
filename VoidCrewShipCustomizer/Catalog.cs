@@ -528,6 +528,13 @@ namespace VoidCrewShipCustomizer
         private static Option RawModuleOption(GUIDUnion guid)
         {
             if (!CanSpawn(guid) || !ResourceAssetContainer<ModuleContainer, CellModule, ModuleDef>.Instance.HasItem(guid)) return null;
+            if (IsWeaponCore(guid))
+            {
+                // A weapon is fitted from its weapon data ("w:"), which its core alone doesn't carry: a core spawned on its own
+                // works, but taking it apart fails, and it then stays stuck in its slot. Only a made-up share code names one.
+                Log.InfoOnce("weapon core " + guid.AsHex(), "Left out a weapon's core named as a module (m:" + guid.AsHex() + "): weapons are fitted as weapons.");
+                return null;
+            }
             ContextInfo context = ContextOf(guid);
             var option = new Option
             {
@@ -561,6 +568,21 @@ namespace VoidCrewShipCustomizer
                 Log.Verbose("Could not read the size of module " + option.Name + ": " + e.Message);
             }
             return option;
+        }
+
+        /// <summary>Whether a module GUID is a weapon's core (the module part of a weapon, fitted through its weapon data).</summary>
+        private static bool IsWeaponCore(GUIDUnion guid)
+        {
+            try
+            {
+                ModuleDef def = ResourceAssetContainer<ModuleContainer, CellModule, ModuleDef>.Instance.GetAssetDefById(guid, false);
+                return def != null && def.Asset is CompositeWeaponModule;
+            }
+            catch (Exception e)
+            {
+                Log.Verbose("Could not tell whether module " + guid.AsHex() + " is a weapon: " + e.Message);
+                return false;
+            }
         }
 
         private static void AddWeaponOptions(List<Option> list)
