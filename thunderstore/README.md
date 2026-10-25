@@ -18,7 +18,7 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
      its type takes), weapon mods, power cells for shields and charge stations, payloads for the payload launcher.
    - **HARDPOINTS** lists every hardpoint as a big, numbered row (port or starboard, bow to aft), handy in VR.
    - **STORAGE** opens every storage rack: click a slot to put any item there (ammo, power cells, repair plates,
-     materials, animus crates, weapon crates, mods or relics).
+     materials, animus crates, weapon crates, mods or relics), or drag a filled slot onto another slot to copy its item.
    - **HOMUNCULUS** picks the standard homunculus or any Blessed Homunculus, each with what its blessing does.
    - **FABRICATOR** sets how many alloys the run starts with, and the fabricator's level (MK I to MK III).
    - **SAVE LOADOUT** keeps the loadout on your PC (10 slots per ship) to bring back in any later match, or copies it

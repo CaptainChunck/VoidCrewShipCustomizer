@@ -592,6 +592,45 @@ internal static class Program
         SharedEditingChecks(plugin, config, sockets);
         ShareCodeChecks(plugin, config);
         SaveFileChecks(plugin, config);
+        StorageDragChecks(plugin, config);
+    }
+
+    // ------------------------------------------------------------------ copying a storage rack slot by dragging it
+
+    private static void StorageDragChecks(Assembly plugin, Type config)
+    {
+        Console.WriteLine("Dragging a storage slot onto another:");
+        Type panel = plugin.GetType("VoidCrewShipCustomizer.StoragePanel", true);
+        MethodInfo past = panel.GetMethod("PastDragThreshold", BindingFlags.NonPublic | BindingFlags.Static);
+        Func<float, float, bool> drag = (dx, dy) => (bool)past.Invoke(null, new object[] { dx, dy });
+        Check(!drag(0f, 0f) && !drag(10f, -10f) && !drag(-15.9f, 0f) && drag(0f, 16f) && drag(-12f, 12f),
+            "a press that moves less than 16 px is still a click; further, it is a drag");
+
+        MethodInfo edge = panel.GetMethod("EdgeScrollStep", BindingFlags.NonPublic | BindingFlags.Static);
+        Func<float, float> step = y => (float)edge.Invoke(null, new object[] { y, 100f, 900f });
+        Check(step(500f) == 0f && step(140f) == 0f && step(860f) == 0f, "a drag away from the rack list's top and bottom doesn't scroll it");
+        Check(step(130f) < 0f && step(870f) > 0f, "near the top it scrolls up, near the bottom down");
+        Check(step(110f) < step(130f) && step(890f) > step(870f), "the nearer the edge, the faster");
+        Check(step(100f) == -16f && step(20f) == -16f && step(900f) == 16f && step(1000f) == 16f, "at or past an edge at full speed, never faster");
+
+        MethodInfo tag = panel.GetMethod("RefusalTag", BindingFlags.NonPublic | BindingFlags.Static);
+        Func<bool, bool, string> refusal = (notAllowed, fits) => (string)tag.Invoke(null, new object[] { notAllowed, fits });
+        Check(refusal(false, true) == null && refusal(false, false) == "DOESN'T FIT THIS RACK" &&
+              refusal(true, true) == "NOT ALLOWED IN THIS MATCH" && refusal(true, false) == "NOT ALLOWED IN THIS MATCH",
+            "a slot refuses with its list's own tag: the match rules first, then what the rack takes");
+
+        MethodInfo setSlot = config.GetMethod("SetRackSlot");
+        object copied = Activator.CreateInstance(config);
+        setSlot.Invoke(copied, new object[] { 12, 3, 1, "i:00112233445566778899aabbccddeeff" });
+        var storage = (IDictionary)config.GetField("Storage").GetValue(copied);
+        var rack = storage[12] as List<string>;
+        Check(rack != null && rack.Count == 3 && rack[0] == "" && rack[1] == "i:00112233445566778899aabbccddeeff" && rack[2] == "",
+            "a copy into a rack the loadout has no list for yet gives it one, its other slots empty");
+        setSlot.Invoke(copied, new object[] { 12, 3, 2, "c:0123456789abcdef0123456789abcdef" });
+        setSlot.Invoke(copied, new object[] { 12, 3, 7, "i:00112233445566778899aabbccddeeff" });
+        rack = (List<string>)storage[12];
+        Check(rack.Count == 3 && rack[1] == "i:00112233445566778899aabbccddeeff" && rack[2] == "c:0123456789abcdef0123456789abcdef",
+            "a copy replaces only its own slot, and a slot the rack doesn't have is left alone");
     }
 
     // ------------------------------------------------------------------ 0.7.0: Fleet Battle match rules, blessings

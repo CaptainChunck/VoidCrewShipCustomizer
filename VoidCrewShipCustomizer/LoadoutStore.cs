@@ -96,6 +96,23 @@ namespace VoidCrewShipCustomizer
         {
             get { return Storage == null ? 0 : Storage.Values.Where(rack => rack != null).Sum(rack => rack.Count(code => !string.IsNullOrEmpty(code))); }
         }
+
+        /// <summary>
+        /// Puts an item code ("" to empty it) in one slot of a storage rack with <paramref name="slotCount"/> slots. A rack
+        /// the loadout has no list for yet gets one, with its other slots empty; a slot the rack doesn't have is left alone.
+        /// </summary>
+        public void SetRackSlot(int rack, int slotCount, int index, string code)
+        {
+            if (Storage == null) Storage = new SortedDictionary<int, List<string>>();
+            List<string> codes;
+            if (!Storage.TryGetValue(rack, out codes) || codes == null)
+            {
+                codes = new List<string>();
+                Storage[rack] = codes;
+            }
+            while (codes.Count < slotCount) codes.Add("");
+            if (index >= 0 && index < codes.Count) codes[index] = code ?? "";
+        }
     }
 
     /// <summary>

@@ -36,6 +36,8 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
   - **STORAGE**: every storage rack and slot. Any item fits any slot: ammo, power cells, repair plates, materials, animus
     crates, weapon crates (an inscribed crate that builds that weapon on any free hardpoint), weapon mods or relics.
     During a CUSTOM run the racks take any item too.
+    **Drag a filled slot onto another slot** (on the same rack or another one) to copy its item there, replacing what was
+    there; a click still opens the list. A slot that won't take the item lights up red and says why, as its list would.
   - **HOMUNCULUS**: the standard homunculus, or any Blessed Homunculus from the game's loadouts. Each one shows what its
     blessing does (the text of the game's tooltip), so there's no need to hover over each one.
   - **FABRICATOR**: how many alloys the run starts with (the game's own amount, or 0 to 10,000), and the fabricator's
