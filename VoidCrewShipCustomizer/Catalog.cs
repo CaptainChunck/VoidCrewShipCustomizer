@@ -12,6 +12,7 @@ using CG.Ship.Modules.Shield;
 using CG.Ship.Object;
 using CG.Space;
 using Client.Player.Interactions;
+using Code.Gameplay.Carryables;
 using Gameplay.CompositeWeapons;
 using Gameplay.Power;
 using Newtonsoft.Json.Linq;
@@ -135,6 +136,8 @@ namespace VoidCrewShipCustomizer
         private static bool _presetContentsRead;
         private static GUIDUnion _weaponCrate;
         private static bool _weaponCrateRead;
+        private static HashSet<GUIDUnion> _batteryPayloads;
+        private static int _batteryPayloadsFrom = -1;
 
         // ---------------------------------------------------------------- ships
 
@@ -430,6 +433,40 @@ namespace VoidCrewShipCustomizer
             return !guid.IsNull && ResourceAssetContainer<CloneStarObjectContainer, AbstractCloneStarObject, CloneStarObjectDef>.Instance.HasItem(guid);
         }
 
+        /// <summary>
+        /// Whether this is the payload inside a mod's payload battery. Such a mod can register the payload as a carryable of
+        /// its own (Ectype Skirmisher's micromissile payload even carries the battery's name), but it is a part of the
+        /// battery, not an item: it has no crafting data, so the game's count of a ship's value fails on it, and in a rack it
+        /// starts as a loose warhead. The game's own battery payloads are not carryables of their own.
+        /// </summary>
+        private static bool IsBatteryPayload(GUIDUnion guid)
+        {
+            RuntimeAssetsRegister register = RuntimeAssetsRegister.Instance;
+            List<GUIDUnion> ids = register.GetAllIds();
+            if (_batteryPayloads == null || ids.Count != _batteryPayloadsFrom)
+            {
+                _batteryPayloadsFrom = ids.Count;
+                _batteryPayloads = new HashSet<GUIDUnion>();
+                foreach (GUIDUnion id in ids)
+                {
+                    try
+                    {
+                        UnityEngine.Object asset;
+                        if (!register.TryGetAsset(id, out asset)) continue;
+                        GameObject prefab = asset as GameObject;
+                        if (prefab == null && asset is Component) prefab = ((Component)asset).gameObject;
+                        PayloadBattery battery = prefab != null ? prefab.GetComponent<PayloadBattery>() : null;
+                        if (battery != null && battery.Payload != null) _batteryPayloads.Add(battery.Payload.assetGuid);
+                    }
+                    catch (Exception e)
+                    {
+                        Log.Verbose("Could not read mod asset " + id.AsHex() + ": " + e.Message);
+                    }
+                }
+            }
+            return _batteryPayloads.Contains(guid);
+        }
+
         private static Option RawModuleOption(GUIDUnion guid)
         {
             if (!CanSpawn(guid) || !ResourceAssetContainer<ModuleContainer, CellModule, ModuleDef>.Instance.HasItem(guid)) return null;
@@ -642,6 +679,12 @@ namespace VoidCrewShipCustomizer
             if (!CanSpawn(guid)) return null;
             ContextInfo context = ContextOf(guid);
             if (IsMissing(context)) return null;
+            if (IsBatteryPayload(guid))
+            {
+                Log.InfoOnce("battery payload " + guid.AsHex(), "Left out " + HeaderOf(context, "Item") + " (" + guid.AsHex() +
+                    "): it is the payload inside a mod's payload battery, not an item a rack can start with.");
+                return null;
+            }
             return new Option
             {
                 Code = "i:" + guid.AsHex(),
