@@ -56,6 +56,8 @@ namespace VoidCrewShipCustomizer
         public Type ModuleType;
         /// <summary>Read once by <see cref="Catalog.BlessingOf"/>: a Blessed Homunculus's blessing, "" for none, null until read.</summary>
         public string Blessing;
+        /// <summary>Worked out once by <see cref="MatchRules.AlwaysBanned"/>: why a Fleet Battle never allows it, "" for nothing, null until then.</summary>
+        public string NeverInPvp;
         /// <summary>The power a module or weapon draws when it is on, and the power a generator makes (the game's base values).</summary>
         public int PowerUse;
         public int PowerMade;
@@ -129,15 +131,17 @@ namespace VoidCrewShipCustomizer
         private static readonly Dictionary<GUIDUnion, HullInfo> Hulls = new Dictionary<GUIDUnion, HullInfo>();
         private static readonly HashSet<GUIDUnion> FailedHulls = new HashSet<GUIDUnion>();
         private static readonly Dictionary<string, Option> ByCode = new Dictionary<string, Option>();
+        /// <summary>Codes that name nothing the game has (an item a mod that is gone added, say): not looked up again.</summary>
+        private static readonly HashSet<string> UnknownCodes = new HashSet<string>();
         private static readonly Dictionary<GUIDUnion, JObject> PresetContents = new Dictionary<GUIDUnion, JObject>();
+        /// <summary>Each module's and weapon's usual contents (see <see cref="UsualContents"/>), by code.</summary>
+        private static readonly Dictionary<string, List<string>> UsualContentsByCode = new Dictionary<string, List<string>>();
         private static List<Option> _slotOptions;
         private static List<Option> _itemOptions;
         private static List<Option> _homunculusOptions;
         private static bool _presetContentsRead;
         private static GUIDUnion _weaponCrate;
         private static bool _weaponCrateRead;
-        private static HashSet<GUIDUnion> _batteryPayloads;
-        private static int _batteryPayloadsFrom = -1;
 
         // ---------------------------------------------------------------- ships
 
@@ -386,13 +390,14 @@ namespace VoidCrewShipCustomizer
                 if (_homunculusOptions != null) return _homunculusOptions;
                 var seen = new HashSet<GUIDUnion>();
                 var list = new List<Option>();
+                HashSet<GUIDUnion> payloads = BatteryPayloads();
                 foreach (ShipLoadoutDataDef def in ResourceAssetContainer<ShipLoadoutDataContainer, ShipLoadoutData, ShipLoadoutDataDef>.Instance.AssetDescriptions)
                 {
                     try
                     {
                         CarryableRef homunculus = def.Asset.ShipLoadout.HomunculusOverride;
                         if (homunculus == null || homunculus.IsNull || !seen.Add(homunculus.AssetGuid)) continue;
-                        Option option = ItemOption(homunculus.AssetGuid, "HOMUNCULUS", 0);
+                        Option option = ItemOption(homunculus.AssetGuid, "HOMUNCULUS", 0, payloads);
                         if (option != null) list.Add(option);
                     }
                     catch (Exception e)
@@ -401,7 +406,11 @@ namespace VoidCrewShipCustomizer
                     }
                 }
                 _homunculusOptions = list.OrderBy(o => o.Name, StringComparer.OrdinalIgnoreCase).ToList();
-                foreach (Option option in _homunculusOptions) ByCode[option.Code] = option;
+                // Not over the item list's own entry for the same code: a rack slot's list opens on that item's tab.
+                foreach (Option option in _homunculusOptions)
+                {
+                    if (!ByCode.ContainsKey(option.Code)) ByCode[option.Code] = option;
+                }
                 return _homunculusOptions;
             }
         }
@@ -439,6 +448,8 @@ namespace VoidCrewShipCustomizer
             option = null;
             if (string.IsNullOrEmpty(code)) return false;
             if (ByCode.TryGetValue(code, out option)) return true;
+            // Looked up already and not there: the racks window asks again for every slot each time it is drawn.
+            if (UnknownCodes.Contains(code)) return false;
             // Make sure the list the code belongs to has been read.
             if (code.StartsWith("m:") || code.StartsWith("w:")) { List<Option> unused = SlotOptions; }
             else { List<Option> unused = ItemOptions; }
@@ -449,11 +460,15 @@ namespace VoidCrewShipCustomizer
             {
                 var guid = new GUIDUnion(code.Substring(2));
                 if (code.StartsWith("m:")) option = RawModuleOption(guid);
-                else if (code.StartsWith("i:") && IsCarryable(guid)) option = ItemOption(guid, "OTHER", 99);
-                if (option != null) ByCode[code] = option;
+                else if (code.StartsWith("i:") && IsCarryable(guid)) option = ItemOption(guid, "OTHER", 99, BatteryPayloads());
             }
+            if (option != null) ByCode[code] = option;
+            // (Up to a limit: codes come from other players' changes and share codes too.)
+            else if (UnknownCodes.Count < MaxUnknownCodes) UnknownCodes.Add(code);
             return option != null;
         }
+
+        private const int MaxUnknownCodes = 4096;
 
         /// <summary>
         /// A module or weapon that can go on a hardpoint (one the hardpoint lists show, or a module only a game loadout
@@ -492,37 +507,34 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>
-        /// Whether this is the payload inside a mod's payload battery. Such a mod can register the payload as a carryable of
-        /// its own (Ectype Skirmisher's micromissile payload even carries the battery's name), but it is a part of the
-        /// battery, not an item: it has no crafting data, so the game's count of a ship's value fails on it, and in a rack it
-        /// starts as a loose warhead. The game's own battery payloads are not carryables of their own.
+        /// The payloads inside mods' payload batteries, looked for once per list that is read (not once per item: that went
+        /// through every asset mods registered, for each of some 300 items). Such a mod can register the payload as a
+        /// carryable of its own (Ectype Skirmisher's micromissile payload even carries the battery's name), but it is a part
+        /// of the battery, not an item: it has no crafting data, so the game's count of a ship's value fails on it, and in a
+        /// rack it starts as a loose warhead. The game's own battery payloads are not carryables of their own.
         /// </summary>
-        private static bool IsBatteryPayload(GUIDUnion guid)
+        private static HashSet<GUIDUnion> BatteryPayloads()
         {
+            var payloads = new HashSet<GUIDUnion>();
             RuntimeAssetsRegister register = RuntimeAssetsRegister.Instance;
-            List<GUIDUnion> ids = register.GetAllIds();
-            if (_batteryPayloads == null || ids.Count != _batteryPayloadsFrom)
+            if (!register.HasAnyAssets()) return payloads;
+            foreach (GUIDUnion id in register.GetAllIds())
             {
-                _batteryPayloadsFrom = ids.Count;
-                _batteryPayloads = new HashSet<GUIDUnion>();
-                foreach (GUIDUnion id in ids)
+                try
                 {
-                    try
-                    {
-                        UnityEngine.Object asset;
-                        if (!register.TryGetAsset(id, out asset)) continue;
-                        GameObject prefab = asset as GameObject;
-                        if (prefab == null && asset is Component) prefab = ((Component)asset).gameObject;
-                        PayloadBattery battery = prefab != null ? prefab.GetComponent<PayloadBattery>() : null;
-                        if (battery != null && battery.Payload != null) _batteryPayloads.Add(battery.Payload.assetGuid);
-                    }
-                    catch (Exception e)
-                    {
-                        Log.Verbose("Could not read mod asset " + id.AsHex() + ": " + e.Message);
-                    }
+                    UnityEngine.Object asset;
+                    if (!register.TryGetAsset(id, out asset)) continue;
+                    GameObject prefab = asset as GameObject;
+                    if (prefab == null && asset is Component) prefab = ((Component)asset).gameObject;
+                    PayloadBattery battery = prefab != null ? prefab.GetComponent<PayloadBattery>() : null;
+                    if (battery != null && battery.Payload != null) payloads.Add(battery.Payload.assetGuid);
+                }
+                catch (Exception e)
+                {
+                    Log.Verbose("Could not read mod asset " + id.AsHex() + ": " + e.Message);
                 }
             }
-            return _batteryPayloads.Contains(guid);
+            return payloads;
         }
 
         private static Option RawModuleOption(GUIDUnion guid)
@@ -709,6 +721,7 @@ namespace VoidCrewShipCustomizer
         {
             CarryableContainer items = ResourceAssetContainer<CarryableContainer, CarryableObject, CarryableDef>.Instance;
             GUIDUnion weaponCrate = WeaponCrateGuid;
+            HashSet<GUIDUnion> payloads = BatteryPayloads();
 
             foreach (CarryableDef def in items.AssetDescriptions)
             {
@@ -716,7 +729,7 @@ namespace VoidCrewShipCustomizer
                 {
                     if (def == null || def.IsNull || def.AssetGuid == weaponCrate) continue;
                     if (def.Category == PurchasableItemSubCategory.Special_Quest && !Settings.ShowQuestItems.Value) continue;
-                    Option option = ItemOption(def.AssetGuid, ItemCategoryName(def.Category), ItemCategoryOrder(def.Category));
+                    Option option = ItemOption(def.AssetGuid, ItemCategoryName(def.Category), ItemCategoryOrder(def.Category), payloads);
                     if (option != null) list.Add(option);
                 }
                 catch (Exception e)
@@ -754,12 +767,13 @@ namespace VoidCrewShipCustomizer
             }
         }
 
-        private static Option ItemOption(GUIDUnion guid, string category, int order)
+        /// <param name="batteryPayloads">The payloads inside mods' payload batteries, left out (see <see cref="BatteryPayloads"/>).</param>
+        private static Option ItemOption(GUIDUnion guid, string category, int order, HashSet<GUIDUnion> batteryPayloads)
         {
             if (!CanSpawn(guid)) return null;
             ContextInfo context = ContextOf(guid);
             if (IsMissing(context)) return null;
-            if (IsBatteryPayload(guid))
+            if (batteryPayloads.Contains(guid))
             {
                 Log.InfoOnce("battery payload " + guid.AsHex(), "Left out " + HeaderOf(context, "Item") + " (" + guid.AsHex() +
                     "): it is the payload inside a mod's payload battery, not an item a rack can start with.");
@@ -1002,9 +1016,22 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         public static List<string> UsualContents(Option option)
         {
+            if (option == null || !Settings.CopyPresetModuleContents.Value) return new List<string>();
+            // Worked out once per module (the HARDPOINTS list asks for every fitted one each time it opens); a copy each time.
+            List<string> codes;
+            if (!UsualContentsByCode.TryGetValue(option.Code, out codes))
+            {
+                codes = ReadUsualContents(option);
+                UsualContentsByCode[option.Code] = codes;
+            }
+            return new List<string>(codes);
+        }
+
+        private static List<string> ReadUsualContents(Option option)
+        {
             var codes = new List<string>();
             JObject template;
-            if (option == null || !Settings.CopyPresetModuleContents.Value || !TryGetPresetContents(option.Guid, out template)) return codes;
+            if (!TryGetPresetContents(option.Guid, out template)) return codes;
             try
             {
                 ShipSocketEntry entry = template.ToObject<ShipSocketEntry>();

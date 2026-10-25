@@ -38,6 +38,7 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
     During a CUSTOM run the racks take any item too.
     **Drag a filled slot onto another slot** (on the same rack or another one) to copy its item there, replacing what was
     there; a click still opens the list. A slot that won't take the item lights up red and says why, as its list would.
+    EMPTY ALL empties every slot (it asks for a second click), and LOAD RACKS fills the racks from another loadout.
   - **HOMUNCULUS**: the standard homunculus, or any Blessed Homunculus from the game's loadouts. Each one shows what its
     blessing does (the text of the game's tooltip), so there's no need to hover over each one.
   - **FABRICATOR**: how many alloys the run starts with (the game's own amount, or 0 to 10,000), and the fabricator's
@@ -46,8 +47,8 @@ Works on every ship (Frigate, Striker, Destroyer), on a monitor or in VR.
     match (replacing or clearing a slot asks for a second click). Works on a loadout you can only look at, too.
     **COPY AS A SHARE CODE** puts the whole loadout on the clipboard as one line of text, to paste in a chat.
   - **LOAD LOADOUT**: replace the CUSTOM loadout with one you saved, a **share code** someone sent you (PASTE A SHARE
-    CODE), any of the game's loadouts (the challenge ones included), or an empty ship (all hardpoints, all racks, or
-    everything), then change what you like.
+    CODE; one a chat wrapped across lines works too), any of the game's loadouts (the challenge ones included), or an
+    empty ship (all hardpoints, all racks, or everything; emptying asks for a second click), then change what you like.
 - **Pop-up windows like the game's own**: the pickers and the storage-rack window are built from the game's pop-up and
   list styles (its dark-grey window with the light-blue outline, list rows and buttons).
 - **Works with [Void Crew Fleet](https://thunderstore.io/c/void-crew/)**: every player ship Fleet adds can use CUSTOM
@@ -185,7 +186,9 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
   those modules empty, and the host puts the items in once the ship is in the world, into the module's real
   `CarryablesSockets`, each only where that socket accepts it.
 - Share codes (0.8.0, `ShareCodes`): `SC1-` and the loadout's JSON, deflated and in URL-safe base64. Pasting one runs it
-  through `Sanitize` like a change from another player.
+  through `Sanitize` like a change from another player. A code split by spaces or line breaks (wrapped by a chat or mail
+  program) is joined up again piece by piece until it reads; codes over 40,000 characters, or that unpack to more than
+  200,000, are refused.
 - Starting alloys go through `GameSession.InitialAlloys`. The fabricator's level is set with
   `FabricatorModule.SetFabricatorTier` once the ship is in the world, as the game does when continuing a saved run.
 - During a CUSTOM run, a prefix on `CarryablesSocket.DoesAccept` lets storage rack slots take any item. The game checks it
@@ -230,6 +233,12 @@ the game's and BepInEx's DLLs from your install (they are not in this repository
   scanner or backup tool holding the file) keeps the changes waiting: it is tried again 5 seconds later (less often while
   it keeps failing), and straight away (a CUSTOM run to remember, a mission starting, the game closing) a few times a
   moment apart. Fields from a newer version are kept (`[JsonExtensionData]`).
+- A `custom-loadouts.json` that can't be read when it is first needed is never written over: the terminal shows stand-in
+  copies, the player is told once that changes aren't saved yet, and the file is read again at each save (and when a
+  saved run asks whether it was a CUSTOM run). Once it can be read, the changes made meanwhile go on top of it, except
+  over a loadout of its own that differs from the stand-in the change was made on, and the CUSTOM runs remembered
+  meanwhile are added. A `saved-loadouts.json` that can't be read stays unwritten that session, and a slot that can't be
+  written keeps what it held.
 
 ### Public API for other mods
 

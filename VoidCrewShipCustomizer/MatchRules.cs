@@ -58,11 +58,19 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>
         /// Why a Fleet Battle never allows this (a relic, a Placeholder weapon, an extra fabricator, the Armory Exchange
-        /// Key), in a few words; null for everything else. The same whether or not a Fleet Battle is on.
+        /// Key), in a few words; null for everything else. The same whether or not a Fleet Battle is on, so it is worked out
+        /// once per option (the lists ask for hundreds of options each time they open).
         /// </summary>
         public static string AlwaysBanned(Option option)
         {
-            if (option == null || string.IsNullOrEmpty(option.Code) || option.Code.Length < 3) return null;
+            if (option == null) return null;
+            if (option.NeverInPvp == null) option.NeverInPvp = WhyNeverInPvp(option) ?? "";
+            return option.NeverInPvp.Length > 0 ? option.NeverInPvp : null;
+        }
+
+        private static string WhyNeverInPvp(Option option)
+        {
+            if (string.IsNullOrEmpty(option.Code) || option.Code.Length < 3) return null;
             string guid = option.Code.Substring(2).ToLowerInvariant();
             string name = RichText.Plain(option.Name);
             if (option.RuleCategory == "RELICS") return "No relics in PvP.";
@@ -84,10 +92,10 @@ namespace VoidCrewShipCustomizer
             return false;
         }
 
-        /// <summary>Whether the menus leave this out: it is never allowed in a Fleet Battle, and one is on.</summary>
+        /// <summary>Whether the menus leave this out: a Fleet Battle is on, and it is never allowed in one.</summary>
         public static bool Hidden(Option option)
         {
-            return AlwaysBanned(option) != null && InMatch;
+            return InMatch && AlwaysBanned(option) != null;
         }
 
         /// <summary>
@@ -212,6 +220,8 @@ namespace VoidCrewShipCustomizer
             public string Instead;
             /// <summary>Where it is, to go there: a hardpoint position, or a rack (core system) and slot; -1 when neither.</summary>
             public int Hardpoint = -1;
+            /// <summary>It is in what the module at <see cref="Hardpoint"/> starts loaded with, not the module itself.</summary>
+            public bool Loaded;
             public int Rack = -1;
             public int Slot = -1;
             /// <summary>The loadout part it is in (see LayoutMerge).</summary>
@@ -250,7 +260,7 @@ namespace VoidCrewShipCustomizer
                     Option option = null;
                     string why = !string.IsNullOrEmpty(inside.Value[i]) && Catalog.TryGetOption(inside.Value[i], out option) ? WhyRefused(option) : null;
                     if (why == null) continue;
-                    issues.Add(new Issue { Name = RichText.Plain(option.Name), Where = HardpointName(hull, inside.Key) + " · LOADED", Why = why, Option = option, Hardpoint = inside.Key });
+                    issues.Add(new Issue { Name = RichText.Plain(option.Name), Where = HardpointName(hull, inside.Key) + " · LOADED", Why = why, Option = option, Hardpoint = inside.Key, Loaded = true });
                     if (fix) inside.Value[i] = "";
                 }
             }

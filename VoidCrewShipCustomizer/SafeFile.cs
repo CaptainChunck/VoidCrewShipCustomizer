@@ -31,16 +31,19 @@ namespace VoidCrewShipCustomizer
         /// before the last save (".bak"), then a save that was cut short (".tmp"). Null when there is none (a first start)
         /// or none can be understood (then it starts fresh; the damaged file is kept as ".broken").
         /// </summary>
-        public static ReadResult Load<T>(string path, string what, out T value) where T : class
+        /// <param name="tries">How many times a file held open by another program is tried, a tenth of a second apart.</param>
+        /// <param name="again">A file that couldn't be read before is tried again: still not being able to read it isn't
+        /// logged as an error again.</param>
+        public static ReadResult Load<T>(string path, string what, out T value, int tries = 5, bool again = false) where T : class
         {
             value = null;
             string text;
-            if (Read(path, out text) == ReadResult.Unreadable) return ReadResult.Unreadable;
+            if (Read(path, out text, tries, again) == ReadResult.Unreadable) return ReadResult.Unreadable;
             if (text == null || TryParse(text, out value)) return ReadResult.Ok;
 
             Damaged.Add(path);
-            KeepBroken(path);
-            Log.Error("Could not understand " + path + " (" + what + "); it is kept as " + Path.GetFileName(path) + ".broken.");
+            Log.Error("Could not understand " + path + " (" + what + "); " +
+                      (KeepBroken(path) ? "it is kept as " + Path.GetFileName(path) + ".broken." : "a copy of it couldn't be kept either."));
             foreach (string copy in new[] { path + ".bak", path + ".tmp" })
             {
                 string copyText;
@@ -82,11 +85,13 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>The file's text, or null when there is none. A finished write that a crash left as ".tmp" is used too.</summary>
-        public static ReadResult Read(string path, out string text)
+        /// <param name="tries">How many times a file held open by another program is tried, a tenth of a second apart.</param>
+        /// <param name="again">A file that couldn't be read before is tried again (see <see cref="Load{T}"/>).</param>
+        public static ReadResult Read(string path, out string text, int tries = 5, bool again = false)
         {
             text = null;
             string temp = path + ".tmp";
-            for (int attempt = 0; ; attempt++)
+            for (int attempt = 1; ; attempt++)
             {
                 try
                 {
@@ -106,19 +111,22 @@ namespace VoidCrewShipCustomizer
                 }
                 catch (IOException e)
                 {
-                    if (attempt >= 4)
-                    {
-                        Log.Error("Could not read " + path + " (" + e.Message + "). It is left as it is: changes made this session won't be saved to it.");
-                        return ReadResult.Unreadable;
-                    }
+                    if (attempt >= tries) return Unreadable(path, e, again);
                     Thread.Sleep(100);
                 }
                 catch (UnauthorizedAccessException e)
                 {
-                    Log.Error("Could not read " + path + " (" + e.Message + "). It is left as it is: changes made this session won't be saved to it.");
-                    return ReadResult.Unreadable;
+                    return Unreadable(path, e, again);
                 }
             }
+        }
+
+        private static ReadResult Unreadable(string path, Exception e, bool again)
+        {
+            string message = "Could not read " + path + " (" + e.Message + "). It is left as it is: nothing is saved over it until it can be read.";
+            if (again) Log.Verbose(message);
+            else Log.Error(message);
+            return ReadResult.Unreadable;
         }
 
         /// <summary>
@@ -174,18 +182,21 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>
         /// Keeps a copy of a file that could not be understood, before it is replaced: the file itself, or the save that was
-        /// cut short (".tmp") when only that is there (it is what was read).
+        /// cut short (".tmp") when only that is there (it is what was read). False when no copy could be made.
         /// </summary>
-        public static void KeepBroken(string path)
+        public static bool KeepBroken(string path)
         {
             try
             {
                 string read = File.Exists(path) ? path : (File.Exists(path + ".tmp") ? path + ".tmp" : null);
-                if (read != null) File.Copy(read, path + ".broken", true);
+                if (read == null) return false;
+                File.Copy(read, path + ".broken", true);
+                return true;
             }
-            catch
+            catch (Exception e)
             {
-                // nothing more to do
+                Log.Verbose("Could not keep a copy of " + path + ": " + e.Message);
+                return false;
             }
         }
     }

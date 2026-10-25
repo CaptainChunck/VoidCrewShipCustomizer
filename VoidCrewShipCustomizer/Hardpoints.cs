@@ -13,6 +13,11 @@ namespace VoidCrewShipCustomizer
     internal static class Hardpoints
     {
         public const float CellSize = 4f;
+        /// <summary>
+        /// Two cells closer than this (squared: 2 m apart) are the same place, as the game links a socket's neighbours
+        /// (sqrMagnitude &lt; 4); cells of different hardpoints are a whole cell, 4 m, apart.
+        /// </summary>
+        private const float SamePlaceDistanceSquared = 2f * 2f;
 
         /// <summary>Centres of the grid cells a socket covers; the same layout as BuildSocket.LinkBuildSocketNeighbors.</summary>
         public static Vector3[] CellsFor(BuildSize size, Vector3 position, Vector3 right, Vector3 forward)
@@ -78,8 +83,7 @@ namespace VoidCrewShipCustomizer
             {
                 foreach (Vector3 cb in b.Cells)
                 {
-                    // The game links neighbours closer than 2 m (sqrMagnitude < 4); cells of different hardpoints are 4 m apart.
-                    if ((ca - cb).sqrMagnitude < CellSize) return true;
+                    if ((ca - cb).sqrMagnitude < SamePlaceDistanceSquared) return true;
                 }
             }
             return false;

@@ -648,21 +648,23 @@ internal static class Program
 
     private static void TerminalSyncChecks(Assembly plugin)
     {
-        Console.WriteLine("Several players at the terminal:");
+        // The rule alone (TerminalUi.Follows): following the room's choice itself, and the redraw, need the game.
+        Console.WriteLine("When the terminal moves to the room's choice (the rule only):");
         MethodInfo follows = plugin.GetType("VoidCrewShipCustomizer.TerminalUi", true).GetMethod("Follows", BindingFlags.NonPublic | BindingFlags.Static);
         // Follows(showsNothing, showsLastChoice, showsStandIn, entering, choiceIsNew)
         Func<bool, bool, bool, bool, bool, bool> follow = (nothing, last, standIn, entering, isNew) =>
             (bool)follows.Invoke(null, new object[] { nothing, last, standIn, entering, isNew });
-        Check(follow(false, true, false, false, true), "a terminal still showing the room's last choice moves to the new one (another player's pick shows on every terminal)");
-        Check(follow(false, false, true, false, true), "a terminal showing the loadout CUSTOM stands in with moves to CUSTOM (the game names the stand-in a moment before CUSTOM's word arrives)");
-        Check(!follow(false, false, false, false, true), "a player looking at another loadout isn't moved while the room's choice changes");
+        Check(follow(false, true, false, false, true), "a terminal still showing the room's last choice moves to its new one");
+        Check(follow(false, false, true, false, true), "a terminal showing the loadout CUSTOM stands in with moves to that CUSTOM");
+        Check(!follow(false, false, false, false, true), "a terminal showing another loadout stays on it when the room's choice changes");
         Check(follow(false, false, false, true, true) && !follow(false, false, false, true, false),
-            "starting to use the terminal shows a choice made since it was last shown, and leaves a player's own browsing alone otherwise");
-        Check(follow(true, false, false, false, false), "a terminal that shows nothing yet shows the room's choice");
+            "as a player starts using the terminal, only a choice it hasn't shown yet moves it");
+        Check(follow(true, false, false, false, false), "a terminal that shows nothing yet moves to the room's choice");
 
         // (Anything that asks Photon about the room can't run without the game.)
         Type custom = plugin.GetType("VoidCrewShipCustomizer.CustomLoadouts", true);
-        Check(custom.GetMethod("RoomChoice").Invoke(null, new object[] { 2 }) == null, "without Void Crew Fleet no choice is known for ship 2");
+        Check(custom.GetMethod("RoomChoice").Invoke(null, new object[] { 2 }) == null, "with nothing chosen for ship 2 (no Void Crew Fleet here), no choice is known for it");
+        TerminalDecisionChecks(plugin);
 
         // Different items with the same name (the game has two of several payload batteries) are told apart in the lists.
         Console.WriteLine("Items with the same name in the lists:");
@@ -711,6 +713,57 @@ internal static class Program
             "a list made again that looks the same is seen as unchanged; one with a changed row isn't");
         MethodInfo readable = plugin.GetType("VoidCrewShipCustomizer.Catalog", true).GetMethod("Readable", BindingFlags.NonPublic | BindingFlags.Static);
         Check((string)readable.Invoke(null, new object[] { "PayloadBattery_ClusterMissile__T1" }) == "PayloadBattery ClusterMissile T1", "a game asset's name reads with spaces for underscores");
+    }
+
+    // ------------------------------------------------------------------ 0.9.5: what the terminal's windows decide
+
+    private static void TerminalDecisionChecks(Assembly plugin)
+    {
+        Console.WriteLine("The terminal's lists and windows (the decisions; drawing them needs the game):");
+        const BindingFlags Hidden = BindingFlags.NonPublic | BindingFlags.Static;
+        Type terminal = plugin.GetType("VoidCrewShipCustomizer.TerminalUi", true);
+        Type hullType = plugin.GetType("VoidCrewShipCustomizer.HullInfo", true);
+        object frigate = Activator.CreateInstance(hullType);
+        object destroyer = Activator.CreateInstance(hullType);
+
+        // ListsDone(shown, listFor, racksFor): the ship type drawn now, and the ones the open list and racks window are for.
+        MethodInfo listsDone = terminal.GetMethod("ListsDone", Hidden);
+        Func<object, object, object, bool> done = (shown, list, racks) => (bool)listsDone.Invoke(null, new[] { shown, list, racks });
+        Check(!done(destroyer, destroyer, null) && !done(destroyer, null, destroyer) && !done(destroyer, destroyer, destroyer) && !done(destroyer, null, null),
+            "a list and the racks window made for the CUSTOM drawn stay open while it is drawn again");
+        Check(done(frigate, destroyer, null) && done(frigate, null, destroyer) && done(frigate, frigate, destroyer),
+            "a list or racks window made for another ship type's CUSTOM closes when the terminal draws this one (0.9.3 kept them open)");
+        Check(done(null, destroyer, null) && done(null, null, null), "drawing a loadout that isn't CUSTOM closes the CUSTOM windows");
+
+        // FillsInAgain(open, openTitle, openHull, openShip, title, hull, ship)
+        MethodInfo fillsIn = terminal.GetMethod("FillsInAgain", Hidden);
+        Func<bool, string, object, int, string, object, int, bool> fill = (open, openTitle, openHull, openShip, title, hull, ship) =>
+            (bool)fillsIn.Invoke(null, new[] { open, openTitle, openHull, openShip, title, hull, (object)ship });
+        Check(fill(true, "HARDPOINTS", destroyer, 1, "HARDPOINTS", destroyer, 1), "after another player's change, the open list is filled in again where it is");
+        Check(!fill(true, "HARDPOINTS", destroyer, 1, "HARDPOINTS", frigate, 1) && !fill(true, "HARDPOINTS", destroyer, 1, "HARDPOINTS", destroyer, 2) &&
+              !fill(true, "HARDPOINTS", destroyer, 1, "CONTENTS", destroyer, 1) && !fill(false, "HARDPOINTS", destroyer, 1, "HARDPOINTS", destroyer, 1),
+            "but not with the rows of another ship type, another ship or another list (it closes instead, so no pick is checked against the wrong loadout)");
+
+        MethodInfo redraw = terminal.GetMethod("RedrawStillNeeded", Hidden);
+        Check((bool)redraw.Invoke(null, new object[] { 7, 7 }) && !(bool)redraw.Invoke(null, new object[] { 7, 8 }),
+            "a redraw asked for is left out when the terminal has drawn a loadout since (Void Crew Fleet showing the ship it switched to)");
+
+        Type picker = plugin.GetType("VoidCrewShipCustomizer.PickerPanel", true);
+        MethodInfo backdrop = picker.GetMethod("BackdropCloses", Hidden);
+        Func<float, bool> closes = t => (bool)backdrop.Invoke(null, new object[] { t });
+        Check(!closes(0f) && !closes(0.2f) && !closes(0.34f) && closes(0.35f) && closes(5f),
+            "a press outside a list or the racks window closes it, but not just after it opened (the second click of a double-click or a bouncing VR trigger)");
+        MethodInfo secondClick = picker.GetMethod("SecondClick", Hidden);
+        MethodInfo stillAsking = picker.GetMethod("StillAsking", Hidden);
+        Func<float, bool> confirms = t => (bool)secondClick.Invoke(null, new object[] { t });
+        Func<float, bool> asking = t => (bool)stillAsking.Invoke(null, new object[] { t });
+        Check(!confirms(0.1f) && confirms(0.5f) && confirms(7.9f) && !confirms(8f) && asking(0.1f) && asking(7.9f) && !asking(8f) && !asking(-1f),
+            "REPLACE, CLEAR and EMPTY act on a second click within 8 seconds, never on a double-click or a bounce");
+
+        Type storage = plugin.GetType("VoidCrewShipCustomizer.StoragePanel", true);
+        MethodInfo waits = storage.GetMethod("RefreshWaits", Hidden);
+        Check((bool)waits.Invoke(null, new object[] { true }) && !(bool)waits.Invoke(null, new object[] { false }),
+            "the racks window waits with another player's change while a press is on a slot, also before it is a drag (0.9.3 lost such a click)");
     }
 
     /// <summary>A Func&lt;Entry, string&gt; that looks the entry's code up in <paramref name="notes"/> (null when it isn't there).</summary>
@@ -987,6 +1040,20 @@ internal static class Program
         Check(!(bool)read.Invoke(null, madeUp) && madeUp[3] != null, "a code whose ship isn't a ship type id is refused (\"" + madeUp[3] + "\")");
         var none = new object[] { "nothing to see here", null, null, null };
         Check(!(bool)read.Invoke(null, none) && ((string)none[3]).Contains("SC1-"), "text without a code says how a code starts");
+
+        // 0.9.5: the size caps (a made-up code can't fill the memory), and a code a chat or mail program wrapped.
+        var tooLong = new object[] { "SC1-" + new string('A', 40001), null, null, null };
+        Check(!(bool)read.Invoke(null, tooLong) && ((string)tooLong[3]).Contains("too long"), "a code longer than any loadout's is refused unread (\"" + tooLong[3] + "\")");
+        object bomb = Activator.CreateInstance(config);
+        config.GetField("Homunculus").SetValue(bomb, new string('x', 300000));
+        var bombCode = (string)codes.GetMethod("Make").Invoke(null, new[] { (object)"4bc2ff9e1d156c94a9c94286a7aaa79b", bomb });
+        var bombArgs = new object[] { bombCode, null, null, null };
+        Check(bombCode.Length < 40000 && !(bool)read.Invoke(null, bombArgs) && bombArgs[3] != null,
+            "a short code that unpacks to more than any loadout (" + bombCode.Length + " characters for 300 000) is refused");
+        string wrapped = "Here it is: " + code.Substring(0, 90) + "\r\n" + code.Substring(90, 100) + " \n" + code.Substring(190) + "\nhave fun";
+        var wrappedArgs = new object[] { wrapped, null, null, null };
+        Check((bool)read.Invoke(null, wrappedArgs) && (string)wrappedArgs[1] == "4bc2ff9e1d156c94a9c94286a7aaa79b" && (int)config.GetField("Alloys").GetValue(wrappedArgs[2]) == 500,
+            "a code wrapped across lines (spaces and line breaks in it, words after it) reads whole");
     }
 
     // ------------------------------------------------------------------ 0.8.0: the save files
@@ -1013,13 +1080,14 @@ internal static class Program
             MethodInfo read = safe.GetMethod("Read");
             write.Invoke(null, new object[] { file, "first" });
             write.Invoke(null, new object[] { file, "second" });
-            var args = new object[] { file, null };
+            // Read(path, out text, tries, again)
+            var args = new object[] { file, null, 5, false };
             read.Invoke(null, args);
             Check((string)args[1] == "second" && File.ReadAllText(file + ".bak") == "first" && !File.Exists(file + ".tmp"),
                 "a save replaces the file in one step and keeps the one before as .bak");
             File.Delete(file);
             File.WriteAllText(file + ".tmp", "cut short");
-            args = new object[] { file, null };
+            args = new object[] { file, null, 5, false };
             read.Invoke(null, args);
             Check((string)args[1] == "cut short", "a save an older version cut short (only .tmp left) is still found");
 
@@ -1029,7 +1097,8 @@ internal static class Program
             write.Invoke(null, new object[] { file, "{\"good\":1}" });
             write.Invoke(null, new object[] { file, "{\"good\":2}" });
             File.WriteAllText(file, "");
-            var loadArgs = new object[] { file, "a test file", null };
+            // Load(path, what, out value, tries, again)
+            var loadArgs = new object[] { file, "a test file", null, 5, false };
             load.Invoke(null, loadArgs);
             var loaded = (Dictionary<string, int>)loadArgs[2];
             Check(loaded != null && loaded["good"] == 1 && File.Exists(file + ".broken"),
@@ -1055,6 +1124,8 @@ internal static class Program
             letGo.Join();
             Check(written && File.ReadAllText(file) == "{\"good\":4}", "a file held open for a moment is written on one of the quick tries");
             StoreRetryChecks(plugin, folder);
+            StoreUnreadableChecks(plugin, config, folder);
+            SavedSlotChecks(plugin, config, folder);
         }
         finally
         {
@@ -1116,6 +1187,163 @@ internal static class Program
         waiting = !onDisk("run-4");
         flushAt(false, 146f);
         Check(waiting && onDisk("run-4"), "a write that keeps failing is tried less often (5 s, then 10 s later)");
+    }
+
+    /// <summary>
+    /// 0.9.5: a CUSTOM loadouts file that couldn't be read at first use (another program held it) is read again at the next
+    /// save, never written over before; then this session's changes go on top of it, except over a loadout the player had
+    /// saved there, and the player is told once that changes wait, and again when they are saved.
+    /// </summary>
+    private static void StoreUnreadableChecks(Assembly plugin, Type config, string folder)
+    {
+        const BindingFlags Hidden = BindingFlags.NonPublic | BindingFlags.Static;
+        Type store = plugin.GetType("VoidCrewShipCustomizer.LoadoutStore", true);
+        Type storeFile = plugin.GetType("VoidCrewShipCustomizer.LoadoutStore+StoreFile", true);
+        Type json = System.Type.GetType("Newtonsoft.Json.JsonConvert, Newtonsoft.Json", true);
+        MethodInfo serialize = json.GetMethod("SerializeObject", new[] { typeof(object) });
+        const string A = "4bc2ff9e1d156c94a9c94286a7aaa79b";
+        const string B = "ac98ae5eb3b940747b0fbb7bd616b019";
+        const string C = "d872500325a2d54498189cdfd4b788e7";
+        const string E = "00000000000000000000000000000001";
+        Func<int, object> loadout = alloys =>
+        {
+            object c = Activator.CreateInstance(config);
+            config.GetField("Alloys").SetValue(c, alloys);
+            config.GetField("CopiedFrom").SetValue(c, "ROOKIE");
+            return config.GetMethod("Normalized").Invoke(c, null);
+        };
+        Func<string[], object> newFile = runs =>
+        {
+            object f = Activator.CreateInstance(storeFile, true);
+            ((List<string>)storeFile.GetField("CustomRuns").GetValue(f)).AddRange(runs);
+            return f;
+        };
+        Func<object, IDictionary> shipsOf = f => (IDictionary)storeFile.GetField("Ships").GetValue(f);
+
+        // On the disk: a CUSTOM Destroyer the player built (A), the Frigate's stand-in as an earlier save left it (B), a
+        // Striker the player built (C), and a run.
+        string path = Path.Combine(folder, "custom-loadouts-unread.json");
+        object disk = newFile(new[] { "run-old" });
+        shipsOf(disk)[A] = loadout(5000);
+        shipsOf(disk)[B] = loadout(-1);
+        shipsOf(disk)[C] = loadout(750);
+        File.WriteAllText(path, (string)serialize.Invoke(null, new[] { disk }));
+        string before = File.ReadAllText(path);
+
+        // What this session did while the file couldn't be read: changed the stand-in copies of A and B (taken to change
+        // from the stand-ins), looked at E for a change that was refused, and remembered a CUSTOM run.
+        object session = newFile(new[] { "run-new" });
+        shipsOf(session)[A] = loadout(111);
+        shipsOf(session)[B] = loadout(222);
+        shipsOf(session)[E] = loadout(-1);
+        store.GetField("_file", Hidden).SetValue(null, session);
+        store.GetField("_readOnly", Hidden).SetValue(null, true);
+        var changed = (IDictionary)store.GetField("ChangedUnread", Hidden).GetValue(null);
+        changed.Add(new KeyValuePair<int, string>(1, A), loadout(-1));
+        changed.Add(new KeyValuePair<int, string>(1, B), loadout(-1));
+        changed.Add(new KeyValuePair<int, string>(1, E), loadout(-1));
+        ((List<string>)store.GetField("RunsUnread", Hidden).GetValue(null)).Add("run-new");
+
+        MethodInfo save = store.GetMethod("Save", Hidden, null, new[] { typeof(float) }, null);
+        MethodInfo flush = store.GetMethod("Flush", Hidden, null, new[] { typeof(bool), typeof(float), typeof(string) }, null);
+        Func<string> takeNotice = () => (string)store.GetMethod("TakeNotice").Invoke(null, null);
+        Func<bool> takeReadLate = () => (bool)store.GetMethod("TakeReadLate").Invoke(null, null);
+        save.Invoke(null, new object[] { 200f });
+        string firstNotice;
+        bool late;
+        string secondNotice;
+        using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            flush.Invoke(null, new object[] { false, 201f, path });
+            firstNotice = takeNotice();
+            late = takeReadLate();
+            flush.Invoke(null, new object[] { false, 207f, path });
+            secondNotice = takeNotice();
+        }
+        Check(File.ReadAllText(path) == before && !late, "a CUSTOM loadouts file that still can't be read is never written over");
+        Check(firstNotice != null && firstNotice.Contains("aren't saved") && secondNotice == null, "the player is told once that their changes wait (\"" + firstNotice + "\")");
+
+        flush.Invoke(null, new object[] { false, 218f, path });
+        string after = File.ReadAllText(path);
+        string notice = takeNotice();
+        late = takeReadLate();
+        Check(after.Contains("\"Alloys\": 5000") && after.Contains("\"Alloys\": 222") && after.Contains("\"Alloys\": 750") && !after.Contains("\"Alloys\": 111") && !after.Contains(E),
+            "once it can be read, a change made on the stand-in it had saved goes in; one made over a loadout the player built doesn't, and the rest is kept");
+        Check(after.Contains("\"run-old\"") && after.Contains("\"run-new\""), "a CUSTOM run remembered meanwhile goes in with the runs it held");
+        Check(late && !takeReadLate() && notice != null && notice.Contains("weren't kept") && notice.Contains("saved"),
+            "the terminal is told to show the loadouts read, and the player what was kept (\"" + notice + "\")");
+        Check(!(bool)store.GetField("_readOnly", Hidden).GetValue(null) && changed.Count == 0, "from then on it saves as usual");
+
+        // What the player is told, and when a change goes on top of the file, on their own.
+        MethodInfo told = store.GetMethod("ReadLateNotice", Hidden);
+        Func<int, int, bool, string> tell = (kept, left, toldBefore) => (string)told.Invoke(null, new object[] { kept, left, toldBefore });
+        Check(tell(0, 0, false) == null && tell(0, 0, true) != null && tell(2, 0, false).Contains("saved") && tell(0, 1, false).Contains("weren't kept"),
+            "nothing to say when nothing changed meanwhile; otherwise whether the changes are saved or the saved loadouts are back");
+        MethodInfo onTop = store.GetMethod("ChangeGoesOnTop", Hidden);
+        Func<object, object, bool> goes = (saved, was) => (bool)onTop.Invoke(null, new[] { saved, was });
+        Check(goes(null, null) && goes(null, loadout(1)) && goes(loadout(1), loadout(1)) && !goes(loadout(2), loadout(1)) && !goes(loadout(1), null),
+            "a change goes on top where the file has nothing, or what it was made on; never over another loadout, nor where what it was made on isn't known");
+    }
+
+    /// <summary>0.9.5: a saved slot that can't be written keeps what it held, and a file that couldn't be read is never written over.</summary>
+    private static void SavedSlotChecks(Assembly plugin, Type config, string folder)
+    {
+        const BindingFlags Hidden = BindingFlags.NonPublic | BindingFlags.Static;
+        Type saved = plugin.GetType("VoidCrewShipCustomizer.SavedLoadouts", true);
+        Type savedFile = plugin.GetType("VoidCrewShipCustomizer.SavedLoadouts+SavedFile", true);
+        Type slotType = plugin.GetType("VoidCrewShipCustomizer.SavedLoadouts+Saved", true);
+        Type hullType = plugin.GetType("VoidCrewShipCustomizer.HullInfo", true);
+        Type guid = System.Type.GetType("GUIDUnion, ResourceAssets", true);
+        object hull = Activator.CreateInstance(hullType);
+        hullType.GetField("ShipGuid").SetValue(hull, Activator.CreateInstance(guid, "4bc2ff9e1d156c94a9c94286a7aaa79b"));
+        Func<int, object> loadout = alloys =>
+        {
+            object c = Activator.CreateInstance(config);
+            config.GetField("Alloys").SetValue(c, alloys);
+            return c;
+        };
+
+        // What was read at first use: slot 3 holds a loadout with 500 alloys.
+        object file = Activator.CreateInstance(savedFile);
+        IList slots = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(slotType));
+        object slot3 = Activator.CreateInstance(slotType);
+        slotType.GetField("Slot").SetValue(slot3, 3);
+        slotType.GetField("Config").SetValue(slot3, loadout(500));
+        slots.Add(slot3);
+        ((IDictionary)savedFile.GetField("Ships").GetValue(file))["4bc2ff9e1d156c94a9c94286a7aaa79b"] = slots;
+        saved.GetField("_file", Hidden).SetValue(null, file);
+
+        string path = Path.Combine(folder, "saved-loadouts.json");
+        File.WriteAllText(path, "{}");
+        MethodInfo save = saved.GetMethod("Save", Hidden, null, new[] { hullType, typeof(int), config, typeof(string) }, null);
+        MethodInfo clear = saved.GetMethod("Clear", Hidden, null, new[] { hullType, typeof(int), typeof(string) }, null);
+        MethodInfo get = saved.GetMethod("Get");
+        Func<int, int> alloysIn = slot =>
+        {
+            object s = get.Invoke(null, new[] { hull, (object)slot });
+            return s == null ? int.MinValue : (int)config.GetField("Alloys").GetValue(slotType.GetField("Config").GetValue(s));
+        };
+        string replaced;
+        string added;
+        string cleared;
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            replaced = save.Invoke(null, new[] { hull, (object)3, loadout(900), path }).ToString();
+            added = save.Invoke(null, new[] { hull, (object)5, loadout(900), path }).ToString();
+            cleared = clear.Invoke(null, new[] { hull, (object)3, path }).ToString();
+        }
+        Check(replaced == "NotWritten" && alloysIn(3) == 500 && added == "NotWritten" && alloysIn(5) == int.MinValue && cleared == "NotWritten",
+            "a slot that can't be written keeps what it held (REPLACE and CLEAR too) and says so, not that the file couldn't be read");
+        string done = save.Invoke(null, new[] { hull, (object)3, loadout(900), path }).ToString();
+        Check(done == "Done" && alloysIn(3) == 900 && File.ReadAllText(path).Contains("900"), "once it can be written, it is");
+
+        saved.GetField("_readOnly", Hidden).SetValue(null, true);
+        string onDisk = File.ReadAllText(path);
+        string refused = save.Invoke(null, new[] { hull, (object)4, loadout(900), path }).ToString();
+        string notCleared = clear.Invoke(null, new[] { hull, (object)3, path }).ToString();
+        Check(refused == "Unreadable" && notCleared == "Unreadable" && alloysIn(4) == int.MinValue && alloysIn(3) == 900 && File.ReadAllText(path) == onDisk,
+            "with a file that couldn't be read, nothing changes and it says why");
+        saved.GetField("_readOnly", Hidden).SetValue(null, false);
     }
 
     // ------------------------------------------------------------------ 0.9.4: progression hooks, by kind
