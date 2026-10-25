@@ -23,6 +23,10 @@ namespace VoidCrewShipCustomizer
         private const int MaxJsonLength = 200000;
 
         private static readonly Regex Code = new Regex(@"SC([01])-([A-Za-z0-9_-]+)");
+        /// <summary>What follows a code: words (or pieces of a code a chat or mail program wrapped onto the next lines).</summary>
+        private static readonly Regex Piece = new Regex(@"\G\s+([A-Za-z0-9_-]+)");
+        /// <summary>How many pieces after a code are tried as its continuation.</summary>
+        private const int MaxPieces = 200;
         private static readonly Regex HullHex = new Regex("^[0-9A-Fa-f]{32}$");
 
         private sealed class Shared
@@ -50,29 +54,56 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>
-        /// Reads a share code out of pasted text (other words around it are fine). False, with the reason in a few words,
-        /// when the text holds none or it can't be read.
+        /// Reads a share code out of pasted text (other words around it are fine, and so is a code a chat or mail program
+        /// wrapped across lines). False, with the reason in a few words, when the text holds none or it can't be read.
         /// </summary>
         public static bool TryRead(string text, out string hullHex, out HullConfig config, out string why)
         {
             hullHex = null;
             config = null;
             why = null;
-            Match match = Code.Match(text ?? "");
+            text = text ?? "";
+            Match match = Code.Match(text);
             if (!match.Success)
             {
                 why = "there is no share code on the clipboard (copy one first: they start with " + Prefix + ")";
                 return false;
             }
-            if (match.Groups[2].Value.Length > MaxCodeLength)
+            bool compressed = match.Groups[1].Value == "1";
+            string code = match.Groups[2].Value;
+            if (code.Length > MaxCodeLength)
             {
                 why = "the share code is too long to be a loadout";
                 return false;
             }
+            if (TryDecode(code, compressed, out hullHex, out config, out why)) return true;
+            // Wrapped across lines (spaces or line breaks in it): the pieces after it are joined on, one at a time, until it
+            // reads. Words after a whole code are never reached: it reads on its own first.
+            string firstWhy = why;
+            int at = match.Index + match.Length;
+            for (int pieces = 0; pieces < MaxPieces; pieces++)
+            {
+                Match piece = Piece.Match(text, at);
+                if (!piece.Success) break;
+                code += piece.Groups[1].Value;
+                at = piece.Index + piece.Length;
+                if (code.Length > MaxCodeLength) break;
+                if (TryDecode(code, compressed, out hullHex, out config, out why)) return true;
+            }
+            why = firstWhy;
+            return false;
+        }
+
+        /// <summary>The loadout in a share code's text (what follows "SC1-" or "SC0-"); false with the reason when it can't be read.</summary>
+        private static bool TryDecode(string code, bool compressed, out string hullHex, out HullConfig config, out string why)
+        {
+            hullHex = null;
+            config = null;
+            why = null;
             try
             {
-                byte[] bytes = FromBase64Url(match.Groups[2].Value);
-                if (match.Groups[1].Value == "1") bytes = Inflate(bytes);
+                byte[] bytes = FromBase64Url(code);
+                if (compressed) bytes = Inflate(bytes);
                 var shared = JsonConvert.DeserializeObject<Shared>(Encoding.UTF8.GetString(bytes));
                 if (shared == null || shared.Config == null || string.IsNullOrEmpty(shared.Hull))
                 {

@@ -77,11 +77,37 @@ namespace VoidCrewShipCustomizer
             try
             {
                 LoadoutStore.Flush(false);
+                TellAboutSaving();
             }
             catch (Exception e)
             {
                 Log.Failure("Saving the CUSTOM loadouts", e);
             }
+        }
+
+        /// <summary>
+        /// When the CUSTOM loadouts file couldn't be read (another program held it), the player is told once that their
+        /// changes can't be saved yet. Once it could be read after all, every CUSTOM loadout is built again from it (the
+        /// terminal showed stand-in copies until then), the terminal is drawn again, and the host shares them again.
+        /// </summary>
+        private static void TellAboutSaving()
+        {
+            string notice = LoadoutStore.TakeNotice();
+            if (notice != null) Notice.Show(notice);
+            if (!LoadoutStore.TakeReadLate()) return;
+            foreach (GUIDUnion guid in Catalog.ShipGuids())
+            {
+                try
+                {
+                    HullInfo hull;
+                    if (Catalog.TryGetHull(guid, out hull)) CustomLoadouts.OnEdited(hull);
+                }
+                catch (Exception e)
+                {
+                    Log.Failure("Showing the CUSTOM loadouts read after all", e);
+                }
+            }
+            TerminalUi.OnLoadoutChangedRemotely();
         }
 
         /// <summary>Changes still waiting to be written are saved before the game closes, also those a failed write left waiting.</summary>

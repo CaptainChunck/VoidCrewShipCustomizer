@@ -61,6 +61,8 @@ namespace VoidCrewShipCustomizer
         private const int ManyRows = 100;
         /// <summary>How long after opening a click in the window is still taken for the click that opened it.</summary>
         private const float PickDelaySeconds = 0.35f;
+        /// <summary>How long a choice that asks for a second click (REPLACE, CLEAR, EMPTY) waits for it.</summary>
+        private const float ConfirmSeconds = 8f;
         /// <summary>
         /// How long after the list was filled in again (another player's change) a click isn't taken for a pick: a click
         /// that started on a row before could end on the same row showing another entry.
@@ -71,7 +73,6 @@ namespace VoidCrewShipCustomizer
         /// <summary>The template the pooled rows were made from (a new terminal can bring a new one).</summary>
         private static VisualTreeAsset _poolTemplate;
 
-        private readonly VisualElement _host;
         private readonly VisualElement _backdrop;
         private readonly Label _subtitle;
         private readonly VisualElement _tabs;
@@ -83,8 +84,6 @@ namespace VoidCrewShipCustomizer
         private string _tab;
         private float _openedAt;
         private float _refreshedAt = -100f;
-
-        public Action Closed;
 
         public bool IsOpen
         {
@@ -106,14 +105,13 @@ namespace VoidCrewShipCustomizer
         /// <param name="team">A Void Crew Fleet team's colour in a Fleet Battle (the frame and bars take it), otherwise null.</param>
         public PickerPanel(VisualElement host, string title, string subtitle, List<Entry> entries, string initialTab, Color? team)
         {
-            _host = host;
             _entries = entries;
 
             _backdrop = new VisualElement { name = "ShipCustomizerPicker" };
             // Click outside the window to close; clicks inside stop at the window.
             _backdrop.RegisterCallback<PointerDownEvent>(e =>
             {
-                if (e.target == _backdrop) Close();
+                if (e.target == _backdrop && BackdropCloses(Time.unscaledTime - _openedAt)) Close();
             });
             VisualElement body = Ui.GameWindow(_backdrop, title, Close, team, 17, 6);
 
@@ -145,6 +143,32 @@ namespace VoidCrewShipCustomizer
             host.Add(_backdrop);
             Ui.Announce(_backdrop);
             Rebuild();
+        }
+
+        /// <summary>
+        /// Whether a press on the darkened screen around a window, <paramref name="sinceOpened"/> seconds after it opened,
+        /// closes it. Not at first: buttons act when they are let go, and the window then covers them, so the second click
+        /// of a double-click, or a VR trigger that bounces, would land on it and close the window it just opened.
+        /// </summary>
+        internal static bool BackdropCloses(float sinceOpened)
+        {
+            return sinceOpened >= PickDelaySeconds;
+        }
+
+        /// <summary>
+        /// Whether a click <paramref name="sinceFirst"/> seconds after the first one is the second click a choice that empties
+        /// or replaces something asks for: within a few seconds, but not straight after (a double-click, or a VR trigger that
+        /// bounces, is still one click).
+        /// </summary>
+        internal static bool SecondClick(float sinceFirst)
+        {
+            return sinceFirst >= PickDelaySeconds && sinceFirst < ConfirmSeconds;
+        }
+
+        /// <summary>Whether a choice clicked once <paramref name="sinceFirst"/> seconds ago still waits for its second click.</summary>
+        internal static bool StillAsking(float sinceFirst)
+        {
+            return sinceFirst >= 0f && sinceFirst < ConfirmSeconds;
         }
 
         /// <summary>The tabs a list has: one per category of its (not pinned) entries, in their order.</summary>
@@ -301,10 +325,15 @@ namespace VoidCrewShipCustomizer
             return row.Root;
         }
 
+        /// <summary>
+        /// Puts the rows back in the pool, last first, so a list filled in again takes them in the same order: each row
+        /// stays where it was, and a press on one that spans the refresh still ends on the row it began on.
+        /// </summary>
         private void ReleaseRows()
         {
-            foreach (Row row in _rows)
+            for (int i = _rows.Count - 1; i >= 0; i--)
             {
+                Row row = _rows[i];
                 row.Owner = null;
                 row.Entry = null;
                 row.Root.RemoveFromHierarchy();
@@ -492,9 +521,6 @@ namespace VoidCrewShipCustomizer
             Ui.HideTooltip();
             ReleaseRows();
             _backdrop.RemoveFromHierarchy();
-            Action closed = Closed;
-            Closed = null;
-            if (closed != null) closed();
         }
     }
 }

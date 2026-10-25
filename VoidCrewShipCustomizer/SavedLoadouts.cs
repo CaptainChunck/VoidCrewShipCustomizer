@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -44,11 +45,14 @@ namespace VoidCrewShipCustomizer
         }
 
         private static SavedFile _file;
-        /// <summary>The file is there but couldn't be read: it is never overwritten this session.</summary>
+        /// <summary>The file is there but couldn't be read: it is never written over this session (nothing is changed, so nothing is lost).</summary>
         private static bool _readOnly;
 
         private static string FilePath
         {
+            // Not inlined into what uses the file: the offline checks run that without the game, which alone knows where its
+            // save folder is (asking it can't even be compiled outside the game).
+            [MethodImpl(MethodImplOptions.NoInlining)]
             get { return Path.Combine(LoadoutStore.Folder, "saved-loadouts.json"); }
         }
 
@@ -98,44 +102,83 @@ namespace VoidCrewShipCustomizer
             return File.Ships.TryGetValue(hull.ShipGuid.AsHex(), out saved) ? saved.ToList() : new List<Saved>();
         }
 
-        /// <summary>Saves a copy of this CUSTOM loadout in a slot (replacing what was there). False when it couldn't be saved.</summary>
-        public static bool Save(HullInfo hull, int slot, HullConfig config)
+        /// <summary>How saving or clearing a slot went.</summary>
+        internal enum Result
         {
-            if (slot < 1 || slot > SlotCount || config == null) return false;
+            Done,
+            /// <summary>The file couldn't be read when it was first needed, so nothing is saved over it this session.</summary>
+            Unreadable,
+            /// <summary>The file couldn't be written just now (another program held it, say); nothing changed.</summary>
+            NotWritten
+        }
+
+        /// <summary>Saves a copy of this CUSTOM loadout in a slot (replacing what was there).</summary>
+        public static Result Save(HullInfo hull, int slot, HullConfig config)
+        {
+            return Save(hull, slot, config, FilePath);
+        }
+
+        /// <summary><see cref="Save(HullInfo, int, HullConfig)"/> to a given file (so the offline checks can run it without the game).</summary>
+        internal static Result Save(HullInfo hull, int slot, HullConfig config, string path)
+        {
+            if (slot < 1 || slot > SlotCount || config == null) return Result.NotWritten;
+            SavedFile file = File;
+            if (_readOnly) return ReadOnly(path);
+            string key = hull.ShipGuid.AsHex();
             List<Saved> saved;
-            if (!File.Ships.TryGetValue(hull.ShipGuid.AsHex(), out saved))
+            bool had = file.Ships.TryGetValue(key, out saved);
+            List<Saved> before = had ? saved.ToList() : null;
+            if (!had)
             {
                 saved = new List<Saved>();
-                File.Ships[hull.ShipGuid.AsHex()] = saved;
+                file.Ships[key] = saved;
             }
             saved.RemoveAll(s => s.Slot == slot);
             saved.Add(new Saved { Slot = slot, SavedAt = DateTime.Now.ToString("d MMM HH:mm", CultureInfo.InvariantCulture), Config = config.Clone().Normalized() });
             saved.Sort((a, b) => a.Slot.CompareTo(b.Slot));
-            return Write();
+            if (Write(file, path)) return Result.Done;
+            // Not on the disk, so not in the lists either: the slot keeps what it held (REPLACE had taken it out).
+            if (had) file.Ships[key] = before;
+            else file.Ships.Remove(key);
+            return Result.NotWritten;
         }
 
-        public static void Clear(HullInfo hull, int slot)
+        /// <summary>Empties a slot (done when it holds nothing).</summary>
+        public static Result Clear(HullInfo hull, int slot)
         {
-            List<Saved> saved;
-            if (File.Ships.TryGetValue(hull.ShipGuid.AsHex(), out saved) && saved.RemoveAll(s => s.Slot == slot) > 0) Write();
+            return Clear(hull, slot, FilePath);
         }
 
-        private static bool Write()
+        /// <summary><see cref="Clear(HullInfo, int)"/> on a given file (so the offline checks can run it without the game).</summary>
+        internal static Result Clear(HullInfo hull, int slot, string path)
         {
             SavedFile file = File;
-            if (_readOnly)
-            {
-                Log.WarnOnce("saved read only", "Your saved loadouts are not saved this session: " + FilePath + " could not be read when the game started.");
-                return false;
-            }
+            List<Saved> saved;
+            if (!file.Ships.TryGetValue(hull.ShipGuid.AsHex(), out saved) || saved.All(s => s.Slot != slot)) return Result.Done;
+            if (_readOnly) return ReadOnly(path);
+            List<Saved> before = saved.ToList();
+            saved.RemoveAll(s => s.Slot == slot);
+            if (Write(file, path)) return Result.Done;
+            file.Ships[hull.ShipGuid.AsHex()] = before;
+            return Result.NotWritten;
+        }
+
+        private static Result ReadOnly(string path)
+        {
+            Log.WarnOnce("saved read only", "Your saved loadouts are not saved this session: " + path + " could not be read when it was first needed.");
+            return Result.Unreadable;
+        }
+
+        private static bool Write(SavedFile file, string path)
+        {
             try
             {
-                SafeFile.Write(FilePath, JsonConvert.SerializeObject(file, Formatting.Indented));
+                SafeFile.Write(path, JsonConvert.SerializeObject(file, Formatting.Indented));
                 return true;
             }
             catch (Exception e)
             {
-                Log.Failure("Saving your loadouts to " + FilePath, e);
+                Log.Failure("Saving your loadouts to " + path, e);
                 return false;
             }
         }

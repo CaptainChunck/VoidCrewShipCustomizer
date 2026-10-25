@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using Client.Player.Interactions;
 using UI.Core;
 using UnityEngine;
@@ -27,8 +26,8 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>
-        /// A press on a filled tile. It becomes a drag once the pointer has moved far enough; until then it is still a click,
-        /// which the tile's own click handles as before.
+        /// A press on a tile. On a filled one it becomes a drag once the pointer has moved far enough; until then (and on an
+        /// empty one always) it is still a click, which the tile's own click handles as before.
         /// </summary>
         private sealed class Drag
         {
@@ -63,7 +62,7 @@ namespace VoidCrewShipCustomizer
         /// The frame of the slot a dragged item would go in: the game's light blue (its pop-up outline), which no rarity
         /// colour is close to (gold would read as a Legendary item's frame).
         /// </summary>
-        private static readonly Color DropHere = new Color(0.741f, 0.906f, 0.984f, 1f);
+        private static readonly Color DropHere = Ui.PopupOutline;
         /// <summary>The dragged copy is a little smaller than a tile, so the frame of the slot under it shows its highlight.</summary>
         private const float GhostScale = 0.76f;
         /// <summary>Near the top or bottom of the rack list (this far in), a drag scrolls it.</summary>
@@ -78,24 +77,32 @@ namespace VoidCrewShipCustomizer
         private readonly Func<HullConfig> _config;
         private readonly Func<bool> _editable;
         private readonly Func<string> _viewOnlyReason;
-        private readonly VisualElement _emptyAll;
+        private readonly Button _emptyAll;
         private readonly VisualElement _loadRacks;
+        /// <summary>When EMPTY ALL was clicked once (it waits for a second click); null when it isn't waiting.</summary>
+        private float? _emptyAsked;
+        private IVisualElementScheduledItem _emptyAskEnds;
         private readonly Func<string, bool> _notAllowed;
         private readonly Action<ShelfInfo, int> _onSlotClicked;
         private readonly Action<ShelfInfo, int, ShelfInfo, int, HullConfig> _onSlotCopied;
+        private readonly Action<string> _onAction;
         private readonly List<Tile> _tiles = new List<Tile>();
         /// <summary>The loadout the tiles were drawn from: what the player sees.</summary>
         private HullConfig _drawn;
         private Drag _drag;
-        /// <summary>The window was asked to redraw during a drag; it does once the drag is over.</summary>
+        /// <summary>The window was asked to redraw while a press was on; it does once the pointer is let go.</summary>
         private bool _refreshWaiting;
-
-        public Action<string> OnAction;
-        public Action Closed;
+        private readonly float _openedAt;
 
         public bool IsOpen
         {
             get { return _backdrop.parent != null; }
+        }
+
+        /// <summary>The ship type the window shows the racks of.</summary>
+        public HullInfo Hull
+        {
+            get { return _hull; }
         }
 
         /// <param name="editable">Whether this player may change the racks now (asked again each time the window redraws:
@@ -116,12 +123,14 @@ namespace VoidCrewShipCustomizer
             _notAllowed = notAllowed;
             _onSlotClicked = onSlotClicked;
             _onSlotCopied = onSlotCopied;
-            OnAction = onAction;
+            _onAction = onAction;
+            _openedAt = Time.unscaledTime;
 
             _backdrop = new VisualElement { name = "ShipCustomizerStorage" };
+            // Click outside the window to close it (not the second click of the one that opened it, see BackdropCloses).
             _backdrop.RegisterCallback<PointerDownEvent>(e =>
             {
-                if (e.target == _backdrop) Close();
+                if (e.target == _backdrop && PickerPanel.BackdropCloses(Time.unscaledTime - _openedAt)) Close();
             });
             _emptyAll = Ui.SmallGameButton("EMPTY ALL", () => Act("empty"));
             _loadRacks = Ui.SmallGameButton("LOAD RACKS", () => Act("copy"));
@@ -146,15 +155,47 @@ namespace VoidCrewShipCustomizer
 
         private void Act(string action)
         {
-            if (OnAction != null && _editable()) OnAction(action);
+            if (_onAction == null || !_editable()) return;
+            if (action == "empty" && !EmptyConfirmed()) return;
+            _onAction(action);
+        }
+
+        /// <summary>
+        /// EMPTY ALL empties every rack slot, for everyone setting up the ship, so it acts on a second click (a VR pointer can
+        /// land on the wrong button), as REPLACE and CLEAR do for saved loadouts: the first one asks on the button itself.
+        /// </summary>
+        private bool EmptyConfirmed()
+        {
+            float now = Time.unscaledTime;
+            if (_emptyAsked.HasValue && PickerPanel.SecondClick(now - _emptyAsked.Value))
+            {
+                StopAskingEmpty();
+                return true;
+            }
+            _emptyAsked = now;
+            _emptyAll.text = "CLICK AGAIN TO EMPTY";
+            if (_emptyAskEnds != null) _emptyAskEnds.Pause();
+            _emptyAskEnds = _backdrop.schedule.Execute(() =>
+            {
+                if (_emptyAsked.HasValue && !PickerPanel.StillAsking(Time.unscaledTime - _emptyAsked.Value)) StopAskingEmpty();
+            }).Every(500);
+            return false;
+        }
+
+        private void StopAskingEmpty()
+        {
+            _emptyAsked = null;
+            _emptyAll.text = "EMPTY ALL";
+            if (_emptyAskEnds != null) _emptyAskEnds.Pause();
+            _emptyAskEnds = null;
         }
 
         /// <summary>Redraws the tiles from the current loadout.</summary>
         public void Refresh()
         {
-            // A dragged tile holds the pointer, so the tiles stay as they are until the drag is over, and the window is drawn
-            // again then. A copy dropped on a slot someone changed meanwhile is refused, as a pick from a list is.
-            if (_drag != null && _drag.Started)
+            // The tiles stay as they are while a press on one is on, and the window is drawn again once it is let go. A copy
+            // dropped on a slot someone changed meanwhile is refused, as a pick from a list is.
+            if (RefreshWaits(_drag != null))
             {
                 _refreshWaiting = true;
                 return;
@@ -165,16 +206,12 @@ namespace VoidCrewShipCustomizer
             HullConfig config = _config();
             _drawn = config.Clone();
             bool editable = _editable();
+            if (!editable && _emptyAsked.HasValue) StopAskingEmpty();
             _emptyAll.style.display = editable ? DisplayStyle.Flex : DisplayStyle.None;
             _loadRacks.style.display = editable ? DisplayStyle.Flex : DisplayStyle.None;
             int slots = 0;
             foreach (ShelfInfo shelf in _hull.Shelves) slots += shelf.Slots.Count;
-            int notAllowed = _notAllowed == null ? 0 : config.Storage.Values.Where(rack => rack != null).Sum(rack => rack.Count(_notAllowed));
-            _summary.text = _hull.Shelves.Count == 0
-                ? "This ship has no storage racks the customizer can fill."
-                : string.Format("{0} of {1} slots filled. {2}", config.StoredCount, slots,
-                    editable ? "Click a slot to choose what the ship starts with there, or drag an item onto another slot to copy it." : _viewOnlyReason()) +
-                  (notAllowed > 0 ? " " + notAllowed + " marked NOT ALLOWED break this match's rules and come off when the mission starts." : "");
+            int notAllowed = 0;
 
             foreach (ShelfInfo shelf in _hull.Shelves)
             {
@@ -193,17 +230,36 @@ namespace VoidCrewShipCustomizer
                 for (int i = 0; i < shelf.Slots.Count; i++)
                 {
                     string code = codes != null && i < codes.Count ? codes[i] : "";
-                    grid.Add(MakeTile(shelf, i, code, editable));
+                    bool tileNotAllowed;
+                    grid.Add(MakeTile(shelf, i, code, editable, out tileNotAllowed));
+                    if (tileNotAllowed) notAllowed++;
                 }
                 _scroll.Add(grid);
             }
+
+            _summary.text = _hull.Shelves.Count == 0
+                ? "This ship has no storage racks the customizer can fill."
+                : string.Format("{0} of {1} slots filled. {2}", config.StoredCount, slots,
+                    editable ? "Click a slot to choose what the ship starts with there, or drag an item onto another slot to copy it." : _viewOnlyReason()) +
+                  (notAllowed > 0 ? " " + notAllowed + " marked NOT ALLOWED break this match's rules and come off when the mission starts." : "");
         }
 
-        private VisualElement MakeTile(ShelfInfo shelf, int index, string code, bool editable)
+        /// <summary>
+        /// Whether drawing the tiles again (another player's change) waits until the pointer is let go: while a press on a
+        /// tile is on, also a click on an empty slot or a press not yet moved far enough to be a drag (0.9.3 waited for drags
+        /// only). Drawing them again takes the tile under the press away, so its click or drag would come to nothing.
+        /// </summary>
+        internal static bool RefreshWaits(bool pressOn)
+        {
+            return pressOn;
+        }
+
+        /// <param name="notAllowed">Whether the item breaks a Fleet Battle's match rules (its tile is marked NOT ALLOWED).</param>
+        private VisualElement MakeTile(ShelfInfo shelf, int index, string code, bool editable, out bool notAllowed)
         {
             Option option = null;
             bool filled = !string.IsNullOrEmpty(code) && Catalog.TryGetOption(code, out option);
-            bool notAllowed = filled && _notAllowed != null && _notAllowed(code);
+            notAllowed = filled && _notAllowed != null && _notAllowed(code);
 
             // A slot in the style of the terminal's module slots: square, dark, framed in the item's rarity colour. The
             // top strip is kept for the slot number (and the NOT ALLOWED mark), the rest for the icon and the name.
@@ -262,7 +318,8 @@ namespace VoidCrewShipCustomizer
             {
                 Ui.Hover(tile, Background(filled), Ui.RowHover);
                 Ui.Click(tile, () => _onSlotClicked(shelf, index));
-                if (filled && _onSlotCopied != null) WatchForDrag(info);
+                // Every slot's presses are watched (a redraw waits for them, see RefreshWaits); only a filled one drags.
+                WatchForDrag(info);
             }
             return tile;
         }
@@ -318,11 +375,12 @@ namespace VoidCrewShipCustomizer
         // ---------------------------------------------------------------- dragging a slot onto another to copy it
 
         /// <summary>
-        /// Lets a filled tile be dragged onto another slot. The tile's own click still opens the list: a press only becomes
-        /// a drag once the pointer has moved past <see cref="DragThreshold"/>, and letting go on the same tile is a click.
-        /// These are the standard pointer events with pointer capture (the tile's click already holds the pointer from the
-        /// press on), so a VR laser that the VR UI Fix turns into pointer events drags like a mouse. They run before the
-        /// tile's click sees the event.
+        /// Lets a filled tile be dragged onto another slot, and keeps track of a press on any tile (the tiles aren't drawn
+        /// again until it is let go). The tile's own click still opens the list: a press only becomes a drag once the
+        /// pointer has moved past <see cref="DragThreshold"/>, and letting go on the same tile is a click. These are the
+        /// standard pointer events with pointer capture (the tile's click already holds the pointer from the press on), so a
+        /// VR laser that the VR UI Fix turns into pointer events drags like a mouse. They run before the tile's click sees
+        /// the event.
         /// </summary>
         private void WatchForDrag(Tile tile)
         {
@@ -362,6 +420,8 @@ namespace VoidCrewShipCustomizer
                 drag.Pointer = evt.position;
                 if (!drag.Started)
                 {
+                    // An empty slot has nothing to copy: a press on it stays a click wherever the pointer goes.
+                    if (drag.From.Item == null || _onSlotCopied == null) return;
                     if (!PastDragThreshold(drag.Pointer.x - drag.Start.x, drag.Pointer.y - drag.Start.y)) return;
                     StartDrag(drag);
                 }
@@ -467,7 +527,7 @@ namespace VoidCrewShipCustomizer
             why.style.flexShrink = 0;
             why.style.marginTop = -TileSize * (1f - GhostScale) / 2f + 2f;
             // The game's pop-up grey behind it, so it reads over any tile.
-            why.style.backgroundColor = new Color(0.188f, 0.188f, 0.188f, 0.96f);
+            why.style.backgroundColor = Ui.MessageFill;
             Ui.Padding(why, 2, 8);
             why.style.display = DisplayStyle.None;
             ghost.Add(why);
@@ -606,7 +666,7 @@ namespace VoidCrewShipCustomizer
         /// <summary>
         /// Once the pointer's event is over (the tile's click has had its turn, and the tiles may be drawn again): the copy,
         /// if any, goes to the terminal, which changes the loadout as a pick would; then the window shows what changed
-        /// during the drag.
+        /// during the press (unless another press has begun meanwhile: then once that one is over).
         /// </summary>
         private void AfterDrag(Drag copied, Tile target)
         {
@@ -625,7 +685,7 @@ namespace VoidCrewShipCustomizer
                         Log.Failure("Copying a storage rack slot", e);
                     }
                 }
-                if (_refreshWaiting && (_drag == null || !_drag.Started)) Refresh();
+                if (_refreshWaiting) Refresh();
             });
         }
 
@@ -636,9 +696,6 @@ namespace VoidCrewShipCustomizer
             _refreshWaiting = false;
             Ui.HideTooltip();
             _backdrop.RemoveFromHierarchy();
-            Action closed = Closed;
-            Closed = null;
-            if (closed != null) closed();
         }
     }
 }

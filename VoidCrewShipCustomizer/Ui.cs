@@ -18,15 +18,18 @@ namespace VoidCrewShipCustomizer
     internal static class Ui
     {
         public static readonly Color Gold = new Color(0.96f, 0.71f, 0.22f, 1f);
-        public static readonly Color Window = new Color(0.06f, 0.065f, 0.07f, 0.97f);
-        public static readonly Color Backdrop = new Color(0f, 0f, 0f, 0.6f);
         public static readonly Color Row = new Color(0.13f, 0.135f, 0.14f, 1f);
         public static readonly Color RowHover = new Color(0.22f, 0.225f, 0.23f, 1f);
-        public static readonly Color ButtonColor = new Color(0.17f, 0.175f, 0.18f, 0.95f);
-        public static readonly Color ButtonHover = new Color(0.3f, 0.3f, 0.31f, 0.95f);
         public static readonly Color Text = new Color(0.93f, 0.93f, 0.93f, 1f);
         public static readonly Color TextDim = new Color(0.62f, 0.63f, 0.65f, 1f);
         public static readonly Color Warning = new Color(1f, 0.45f, 0.35f, 1f);
+
+        // The game's pop-up colours (SharedUIColorTheme): its dark grey and light-blue outline, used where its pop-up style
+        // sheet isn't loaded, and for the customizer's messages over the screen.
+        public static readonly Color PopupFill = new Color(0.188f, 0.188f, 0.188f, 1f);
+        public static readonly Color PopupOutline = new Color(0.741f, 0.906f, 0.984f, 1f);
+        /// <summary>The pop-up grey, a little see-through: behind a message drawn over the screen.</summary>
+        public static readonly Color MessageFill = new Color(0.188f, 0.188f, 0.188f, 0.96f);
 
         public static Label Label(string text, int size, Color color, bool bold = false)
         {
@@ -45,24 +48,6 @@ namespace VoidCrewShipCustomizer
             label.style.paddingBottom = 0;
             label.style.whiteSpace = WhiteSpace.Normal;
             return label;
-        }
-
-        /// <summary>A flat button: a box with a label, highlighted on hover.</summary>
-        public static VisualElement Button(string text, Action onClick, int size = 20)
-        {
-            var button = new VisualElement();
-            button.style.flexDirection = FlexDirection.Row;
-            button.style.alignItems = Align.Center;
-            button.style.justifyContent = Justify.Center;
-            Padding(button, 6, 14);
-            Margin(button, 0, 6, 0, 0);
-            Radius(button, 3);
-            Border(button, 1, new Color(1f, 1f, 1f, 0.18f));
-            button.style.backgroundColor = ButtonColor;
-            button.Add(Label(text, size, Text, true));
-            Hover(button, ButtonColor, ButtonHover);
-            Click(button, onClick);
-            return button;
         }
 
         /// <summary>
@@ -160,13 +145,6 @@ namespace VoidCrewShipCustomizer
             });
         }
 
-        public static void Tooltip(VisualElement element, ContextInfo context, GUIDUnion guid)
-        {
-            if (context == null) return;
-            var data = new ContextHoverData(context, guid);
-            Tooltip(element, () => data);
-        }
-
         public static void HideTooltip()
         {
             try
@@ -223,12 +201,12 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         public static VisualTreeAsset ListEntryTemplate;
 
-        // The game's colours (SharedUIColorTheme), for when its pop-up style sheet isn't loaded.
-        private static readonly Color PopupFill = new Color(0.188f, 0.188f, 0.188f, 1f);
-        private static readonly Color PopupOutline = new Color(0.741f, 0.906f, 0.984f, 1f);
+        // The game's decoration brown (SharedUIColorTheme), for when its pop-up style sheet isn't loaded.
         private static readonly Color DecoBrown = new Color(0.369f, 0.329f, 0.29f, 1f);
 
         private static StyleSheet _popupStyle;
+        /// <summary>The pop-up style sheet wasn't found: not looked for again before this time (looking goes through every style sheet loaded).</summary>
+        private static float _nextPopupStyleSearch;
 
         /// <summary>
         /// The game's own pop-up style sheet (PopupBaseStyle: .popup-background, .popup-border, .deco-color). It is loaded in
@@ -236,7 +214,7 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         private static StyleSheet PopupStyle()
         {
-            if (_popupStyle != null) return _popupStyle;
+            if (_popupStyle != null || Time.unscaledTime < _nextPopupStyleSearch) return _popupStyle;
             try
             {
                 _popupStyle = Resources.FindObjectsOfTypeAll<StyleSheet>().FirstOrDefault(s => s != null && s.name == "PopupBaseStyle");
@@ -244,6 +222,12 @@ namespace VoidCrewShipCustomizer
             catch (Exception e)
             {
                 Log.Verbose("Could not look for the game's pop-up style: " + e.Message);
+            }
+            if (_popupStyle == null)
+            {
+                // A game update may have renamed it: the windows use the game's colours instead, and it is looked for again later.
+                _nextPopupStyleSearch = Time.unscaledTime + 30f;
+                Log.InfoOnce("no popup style", "The game's pop-up style sheet (PopupBaseStyle) wasn't found, so the CUSTOM windows use its colours instead.");
             }
             return _popupStyle;
         }
@@ -384,7 +368,11 @@ namespace VoidCrewShipCustomizer
             element.RegisterCallback<PointerLeaveEvent>(e => element.style.backgroundColor = normal);
         }
 
-        /// <summary>Tells the game a new element is on screen, as it does for its own (sounds, navigation).</summary>
+        /// <summary>
+        /// Tells the game a new element is on screen, as it does for its own elements. In game 1.3.0 only its translation
+        /// listens (it translates texts that are its own "#" keys, which the customizer's aren't); sounds and navigation
+        /// don't. Done anyway, so a later version of the game that listens for more sees the customizer's elements too.
+        /// </summary>
         public static void Announce(VisualElement element)
         {
             try

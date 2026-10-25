@@ -50,15 +50,21 @@ namespace VoidCrewShipCustomizer
         private static PickerPanel _picker;
         /// <summary>The loadout as it was when the open list was made (which ship type and which ship), to catch a part that changed meanwhile.</summary>
         private static HullConfig _pickerSeen;
-        private static GUIDUnion _pickerSeenHull;
+        /// <summary>The ship type the open list was made for (its picks change that type's CUSTOM loadout).</summary>
+        private static HullInfo _pickerHull;
         private static int _pickerSeenShip;
         private static StoragePanel _storage;
         private static VisualElement _toast;
         private static Label _toastLabel;
         private static int _toastVersion;
         private static bool _reportWritten;
+        /// <summary>The game-data report waits to be written by the terminal on screen (a moment after it showed).</summary>
+        private static bool _reportAsked;
         /// <summary>A redraw is asked for and comes on the next frame (see <see cref="RequestRedisplay"/>).</summary>
         private static bool _redisplayAsked;
+        /// <summary>How many times the terminal has drawn a loadout, and how many when the last redraw was asked for.</summary>
+        private static int _displays;
+        private static int _redisplayAskedAt;
 
         /// <summary>
         /// The loadout the terminal last showed as the room's choice for the ship it sets up. While it still shows it, the
@@ -83,6 +89,7 @@ namespace VoidCrewShipCustomizer
         /// <summary>The terminal showed a loadout (after the ship picture, resources and systems were drawn).</summary>
         public static void OnTerminalDisplayed(LoadoutTerminal terminal, ShipLoadoutDataDef def, VisualElement root)
         {
+            _displays++;
             // A new terminal first shows the room's choice (everything it shows in its first frame, as it sets itself up).
             if (terminal != _terminal) _choiceFrame = Time.frameCount;
             _terminal = terminal;
@@ -91,13 +98,26 @@ namespace VoidCrewShipCustomizer
             _shown = def;
             if (_choiceFrame == Time.frameCount) _choiceShown = def;
             HullInfo hull;
-            HullInfo before = _shownHull;
             _shownHull = CustomLoadouts.TryGetHull(def, out hull) ? hull : null;
-            // Lists made for another loadout are done with (lists stay open while the same CUSTOM is drawn again).
-            if (_shownHull == null || (before != null && before != _shownHull)) CloseOverlays();
+            // Lists made for another loadout are done with; they stay open while the same CUSTOM is drawn again. The ship
+            // picture was drawn first and has set the ship type shown already, so each pop-up's own ship type tells.
+            if (ListsDone(_shownHull, _picker != null && _picker.IsOpen ? _pickerHull : null, _storage != null && _storage.IsOpen ? _storage.Hull : null)) CloseOverlays();
             else if (_storage != null && _storage.IsOpen) _storage.Refresh();
+            // Once per drawing, after the ship picture (OnLayoutShown) and with what is shown now.
             UpdateToolbar();
             WriteReportOnce();
+        }
+
+        /// <summary>
+        /// Whether the open CUSTOM list and the racks window are done with once the terminal has drawn a loadout: when it
+        /// shows no CUSTOM loadout now, or the CUSTOM of another ship type than the one they were made for (the terminal's
+        /// next and previous ship keys switch ship type while a list is open). They stay open while the same CUSTOM is drawn
+        /// again (another player's change, say). <paramref name="listFor"/> and <paramref name="racksFor"/> are null when
+        /// that window isn't open.
+        /// </summary>
+        internal static bool ListsDone(HullInfo shown, HullInfo listFor, HullInfo racksFor)
+        {
+            return shown == null || (listFor != null && listFor != shown) || (racksFor != null && racksFor != shown);
         }
 
         /// <summary>The ship picture was drawn for a loadout.</summary>
@@ -125,7 +145,7 @@ namespace VoidCrewShipCustomizer
                 UndecorateSlots();
                 LockSelect(false, null, false);
             }
-            UpdateToolbar();
+            // The toolbar follows in OnTerminalDisplayed: the game only draws the ship picture as part of a whole drawing.
         }
 
         public static void OnTerminalDestroyed(LoadoutTerminal terminal)
@@ -137,6 +157,7 @@ namespace VoidCrewShipCustomizer
             _root = null;
             _slots = null;
             _selectButton = null;
+            _selectLocked = false;
             _anchor = null;
             _shown = null;
             _shownHull = null;
@@ -146,6 +167,8 @@ namespace VoidCrewShipCustomizer
             _choiceShown = null;
             _followAsked = false;
             _followPending = false;
+            // A report that waited on this terminal is written by the next one.
+            _reportAsked = false;
             ToldNotChosen.Clear();
             Hooks.Clear();
             CustomLoadouts.ResetTerminalShip();
@@ -161,12 +184,16 @@ namespace VoidCrewShipCustomizer
 
         /// <summary>
         /// Draws the terminal again once, on the next frame, however many changes ask for it at once: each draw runs the
-        /// game's whole Display, which makes every module icon again (and the open storage window is refreshed by it). An
-        /// open CUSTOM list is made again too, so a player busy in one sees the other players' changes as well.
+        /// game's whole Display, which makes every module icon again (and the open storage window is refreshed by it). Not
+        /// when the terminal has drawn a loadout since the last change asked (Void Crew Fleet showing the ship it switched
+        /// to, say): that drawing already showed everything as it is now. An open CUSTOM list is made again too, so a player
+        /// busy in one sees the other players' changes as well.
         /// </summary>
         private static void RequestRedisplay()
         {
-            if (_redisplayAsked || _root == null || _shownHull == null) return;
+            if (_root == null || _shownHull == null) return;
+            _redisplayAskedAt = _displays;
+            if (_redisplayAsked) return;
             _redisplayAsked = true;
             _root.schedule.Execute(() =>
             {
@@ -174,7 +201,7 @@ namespace VoidCrewShipCustomizer
                 try
                 {
                     if (_shownHull == null) return;
-                    Redisplay();
+                    if (RedrawStillNeeded(_redisplayAskedAt, _displays)) Redisplay();
                     RefreshOpenPicker();
                 }
                 catch (Exception e)
@@ -182,6 +209,16 @@ namespace VoidCrewShipCustomizer
                     Log.Failure("Refreshing the loadout terminal", e);
                 }
             });
+        }
+
+        /// <summary>
+        /// Whether a redraw asked for when the terminal had drawn <paramref name="displaysWhenAsked"/> loadouts is still
+        /// needed now that it has drawn <paramref name="displaysNow"/>: not when it has drawn one since (every drawing builds
+        /// a changed CUSTOM loadout again first, and the toolbar and the racks window with it).
+        /// </summary>
+        internal static bool RedrawStillNeeded(int displaysWhenAsked, int displaysNow)
+        {
+            return displaysNow == displaysWhenAsked;
         }
 
         // ---------------------------------------------------------------- following the room's choice
@@ -307,6 +344,7 @@ namespace VoidCrewShipCustomizer
             var list = LoadoutListField != null ? LoadoutListField.GetValue(_terminal) as ShipLoadoutList : null;
             if (list != null)
             {
+                // Listing another ship type's loadouts makes the game show one of them: the room's choice when it is there.
                 if (!list.ContainsLoadout(def)) list.OnShipEntryClicked(def.ShipGuid);
                 if (list.ContainsLoadout(def))
                 {
@@ -315,7 +353,8 @@ namespace VoidCrewShipCustomizer
                     list.Select(def);
                 }
             }
-            if (DisplayMethod != null) DisplayMethod.Invoke(_terminal, new object[] { def });
+            // Not drawn twice: when the game has just shown it (the caller only comes here while it shows something else).
+            if (DisplayMethod != null && _shown != def) DisplayMethod.Invoke(_terminal, new object[] { def });
         }
 
         /// <summary>The player stepped away from the terminal.</summary>
@@ -586,7 +625,7 @@ namespace VoidCrewShipCustomizer
             subtitle += BreaksRulesNote(current);
             if (socket.Overlaps.Any(i => hull.Sockets[i].Size < socket.Size)) subtitle += " A smaller module takes one part of this hardpoint.";
             if (Settings.AllowAnySize.Value) subtitle += " (Any size allowed: see the AllowAnySize setting.)";
-            OpenPicker(title, subtitle, entries, current != null ? current.Category : null, true, () => OpenSlotPicker(hull, socket, fromList));
+            OpenPicker(hull, title, subtitle, entries, current != null ? current.Category : null, true, () => OpenSlotPicker(hull, socket, fromList));
         }
 
         /// <summary>For a picker's subtitle: why the current choice breaks this match's rules, or "".</summary>
@@ -676,7 +715,7 @@ namespace VoidCrewShipCustomizer
             }
             string subtitle = "What the " + module.Name + " starts loaded with. Each slot only takes what fits it" +
                               (own ? "." : "; now its usual contents.") + (MatchRules.InMatch ? " In a Fleet Battle the match rules apply too." : "");
-            OpenPicker("CONTENTS · " + RichText.Plain(module.Name).ToUpperInvariant(), subtitle, entries, null, true, () => OpenContentsPicker(hull, socket));
+            OpenPicker(hull, "CONTENTS · " + RichText.Plain(module.Name).ToUpperInvariant(), subtitle, entries, null, true, () => OpenContentsPicker(hull, socket));
         }
 
         /// <summary>Every item one slot of a fitted module takes (what fits it, as the game decides when you load it by hand).</summary>
@@ -731,7 +770,7 @@ namespace VoidCrewShipCustomizer
             PickerPanel.TellApart(entries, VariantNote);
             Option currentItem;
             string tab = !string.IsNullOrEmpty(currentCode) && Catalog.TryGetOption(currentCode, out currentItem) ? currentItem.Category : null;
-            OpenPicker("SLOT " + (slotIndex + 1) + "  ·  " + Catalog.KindOf(slot) + "  ·  " + RichText.Plain(module.Name).ToUpperInvariant(),
+            OpenPicker(hull, "SLOT " + (slotIndex + 1) + "  ·  " + Catalog.KindOf(slot) + "  ·  " + RichText.Plain(module.Name).ToUpperInvariant(),
                 "What this slot of the " + module.Name + " starts with: only what fits it is listed.", entries, tab, true, () => OpenContentItemPicker(hull, socket, slotIndex));
         }
 
@@ -916,7 +955,7 @@ namespace VoidCrewShipCustomizer
             row.style.flexDirection = FlexDirection.Row;
             row.style.alignItems = Align.Center;
             row.style.justifyContent = Justify.SpaceBetween;
-            Label header = Ui.GameLabel(title, "ui-text-size__large", "ui-text-color__white", "loadout-panel-header", "ui-text-dropshadow");
+            Label header = Ui.GameHeader(title);
             header.style.flexShrink = 0;
             row.Add(header);
             if (!string.IsNullOrEmpty(note))
@@ -961,7 +1000,7 @@ namespace VoidCrewShipCustomizer
         {
             if (issue.Hardpoint >= 0 && issue.Hardpoint < hull.Sockets.Count)
             {
-                if (issue.Where.EndsWith("LOADED")) OpenContentsPicker(hull, hull.Sockets[issue.Hardpoint]);
+                if (issue.Loaded) OpenContentsPicker(hull, hull.Sockets[issue.Hardpoint]);
                 else OnSlotClicked(hull, issue.Hardpoint, false);
                 return;
             }
@@ -1022,7 +1061,7 @@ namespace VoidCrewShipCustomizer
             string subtitle = issues.Count == 0
                 ? "This CUSTOM loadout keeps to the rules of this Fleet Battle."
                 : "When the mission starts, the host takes off what breaks this Fleet Battle's rules" + (editable ? ". You can also take it off now." : ".");
-            OpenPicker("MATCH RULES", subtitle, entries, issues.Count > 0 ? "BREAKS THE RULES" : "THE RULES", true, () => OpenRulesPicker(hull));
+            OpenPicker(hull, "MATCH RULES", subtitle, entries, issues.Count > 0 ? "BREAKS THE RULES" : "THE RULES", true, () => OpenRulesPicker(hull));
         }
 
         /// <summary>
@@ -1064,7 +1103,7 @@ namespace VoidCrewShipCustomizer
                     OnPick = () => OnSlotClicked(hull, chosen.Index, true)
                 });
             }
-            OpenPicker("HARDPOINTS · " + hull.Name.ToUpperInvariant(),
+            OpenPicker(hull, "HARDPOINTS · " + hull.Name.ToUpperInvariant(),
                 (editable ? "Pick a hardpoint to change what is fitted there. Port is the ship's left, starboard its right. " : CustomLoadouts.WhyNotEditable() + " ") +
                 CustomLoadouts.PowerLine(hull, config) + ".",
                 entries, null, true, () => OpenHardpointList(hull));
@@ -1132,7 +1171,7 @@ namespace VoidCrewShipCustomizer
             string subtitle = "The homunculus your ship starts with in the Central Computer Cradle, with what each blessing does.";
             if (!string.IsNullOrEmpty(config.Homunculus) && Catalog.TryGetOption(config.Homunculus, out current)) subtitle += BreaksRulesNote(current);
             PickerPanel.TellApart(entries, VariantNote);
-            OpenPicker("HOMUNCULUS", subtitle, entries, null, true, () => OpenHomunculusPicker(hull));
+            OpenPicker(hull, "HOMUNCULUS", subtitle, entries, null, true, () => OpenHomunculusPicker(hull));
         }
 
         /// <summary>Starting alloys a run can be given, besides the game's own amount.</summary>
@@ -1199,7 +1238,7 @@ namespace VoidCrewShipCustomizer
                 subtitle += " This match allows " + alloyRule + " and a fabricator up to " +
                             CustomLoadouts.FabricatorLevelName(MatchRules.AllowedFabricatorLevel(HullConfig.MaxFabricatorLevel)) + ".";
             }
-            OpenPicker("FABRICATOR", subtitle, entries, null, true, () => OpenFabricatorPicker(hull));
+            OpenPicker(hull, "FABRICATOR", subtitle, entries, null, true, () => OpenFabricatorPicker(hull));
         }
 
         private static PickerPanel.Entry AlloyEntry(HullInfo hull, int amount, int currentAmount, string name, string detail)
@@ -1242,7 +1281,7 @@ namespace VoidCrewShipCustomizer
             {
                 int chosen = slot;
                 SavedLoadouts.Saved saved = SavedLoadouts.Get(hull, slot);
-                bool asking = saved != null && Asking(slot, "save");
+                bool asking = saved != null && Asking(hull, slot, "save");
                 entries.Add(new PickerPanel.Entry
                 {
                     Name = "SLOT " + slot,
@@ -1253,7 +1292,7 @@ namespace VoidCrewShipCustomizer
                     OnPick = () =>
                     {
                         // A saved loadout is only replaced on a second click (a VR pointer can land on the wrong row).
-                        if (saved != null && !Confirmed(chosen, "save"))
+                        if (saved != null && !Confirmed(hull, chosen, "save"))
                         {
                             OpenSavePicker(hull);
                             return;
@@ -1265,7 +1304,7 @@ namespace VoidCrewShipCustomizer
             foreach (SavedLoadouts.Saved saved in SavedLoadouts.All(hull))
             {
                 int chosen = saved.Slot;
-                bool asking = Asking(chosen, "clear");
+                bool asking = Asking(hull, chosen, "clear");
                 entries.Add(new PickerPanel.Entry
                 {
                     Name = "CLEAR SLOT " + saved.Slot,
@@ -1275,14 +1314,14 @@ namespace VoidCrewShipCustomizer
                     TagColor = Ui.Warning,
                     OnPick = () =>
                     {
-                        if (!Confirmed(chosen, "clear"))
+                        if (!Confirmed(hull, chosen, "clear"))
                         {
                             OpenSavePicker(hull, "CLEAR");
                             if (_picker != null) _picker.ScrollTo(new Vector2(0f, 0f));
                             return;
                         }
-                        SavedLoadouts.Clear(hull, chosen);
-                        Toast("Slot " + chosen + " is empty again.");
+                        SavedLoadouts.Result cleared = SavedLoadouts.Clear(hull, chosen);
+                        Toast(cleared == SavedLoadouts.Result.Done ? "Slot " + chosen + " is empty again." : "Slot " + chosen + " wasn't cleared: " + WhyNotSaved(cleared));
                     }
                 });
             }
@@ -1294,7 +1333,7 @@ namespace VoidCrewShipCustomizer
                 Tag = "COPY",
                 OnPick = () => CopyShareCode(hull)
             });
-            OpenPicker("SAVE LOADOUT · " + hull.Name.ToUpperInvariant(),
+            OpenPicker(hull, "SAVE LOADOUT · " + hull.Name.ToUpperInvariant(),
                 "Keep this CUSTOM loadout on your PC, then bring it back in any later match with LOAD LOADOUT (on a " + hull.Name + "), or share it as a code.",
                 entries, tab);
         }
@@ -1329,9 +1368,9 @@ namespace VoidCrewShipCustomizer
             if (hullHex != hull.ShipGuid.AsHex())
             {
                 var otherGuid = new GUIDUnion(hullHex);
-                HullInfo other;
-                bool known = Catalog.ShipGuids().Contains(otherGuid) && Catalog.TryGetHull(otherGuid, out other);
-                Toast("That share code is for " + (known ? "the " + CustomLoadouts.HullName(otherGuid) + ": pick that ship first." : "a ship this game doesn't have."));
+                // Only its name is needed, which the game knows without the customizer reading that whole ship.
+                bool known = Catalog.ShipGuids().Contains(otherGuid);
+                Toast("That share code is for " + (known ? "the " + Catalog.HeaderOf(Catalog.ContextOf(otherGuid), "other ship") + ": pick that ship first." : "a ship this game doesn't have."));
                 return;
             }
             HullConfig clean = CustomLoadouts.Sanitize(hull, shared);
@@ -1339,27 +1378,35 @@ namespace VoidCrewShipCustomizer
             Toast(storageOnly ? "Loaded the storage racks of the share code." : "Loaded the share code: " + CustomLoadouts.Summary(clean) + ".");
         }
 
-        /// <summary>The saved slot (and what for) that waits for a second click, and since when.</summary>
+        /// <summary>
+        /// The choice that waits for a second click (a saved slot to replace or clear, or what to empty), for which ship type
+        /// and ship, and since when. A click on the same choice for another ship type or ship asks again.
+        /// </summary>
         private static int _askSlot;
         private static string _askAction;
+        private static HullInfo _askHull;
+        private static int _askShip;
         private static float _askSince;
 
-        /// <summary>Whether a saved slot waits for a second click for this.</summary>
-        private static bool Asking(int slot, string action)
+        /// <summary>Whether a choice (a saved slot, or 0) waits for a second click for this.</summary>
+        private static bool Asking(HullInfo hull, int slot, string action)
         {
-            return _askSlot == slot && _askAction == action && Time.unscaledTime - _askSince < 8f;
+            return _askAction == action && _askSlot == slot && _askHull == hull && _askShip == CustomLoadouts.TerminalShip &&
+                   PickerPanel.StillAsking(Time.unscaledTime - _askSince);
         }
 
         /// <summary>True on the second click (within a few seconds); the first one only asks.</summary>
-        private static bool Confirmed(int slot, string action)
+        private static bool Confirmed(HullInfo hull, int slot, string action)
         {
-            if (Asking(slot, action))
+            if (Asking(hull, slot, action))
             {
-                _askSlot = 0;
+                _askAction = null;
                 return true;
             }
             _askSlot = slot;
             _askAction = action;
+            _askHull = hull;
+            _askShip = CustomLoadouts.TerminalShip;
             _askSince = Time.unscaledTime;
             return false;
         }
@@ -1367,12 +1414,16 @@ namespace VoidCrewShipCustomizer
         private static void SaveToSlot(HullInfo hull, int slot)
         {
             HullConfig config = CustomLoadouts.ConfigToShow(hull);
-            if (!SavedLoadouts.Save(hull, slot, config))
-            {
-                Toast("Not saved: your saved loadouts file couldn't be read when the game started (see the BepInEx log).");
-                return;
-            }
-            Toast("Saved to slot " + slot + ": " + CustomLoadouts.Summary(config) + ".");
+            SavedLoadouts.Result saved = SavedLoadouts.Save(hull, slot, config);
+            Toast(saved == SavedLoadouts.Result.Done ? "Saved to slot " + slot + ": " + CustomLoadouts.Summary(config) + "." : "Not saved: " + WhyNotSaved(saved));
+        }
+
+        /// <summary>Why a saved slot didn't change, for a message.</summary>
+        private static string WhyNotSaved(SavedLoadouts.Result result)
+        {
+            return result == SavedLoadouts.Result.Unreadable
+                ? "your saved loadouts file couldn't be read this session (another program may have held it; see the BepInEx log). Restart the game to save again."
+                : "your saved loadouts file couldn't be written just now (see the BepInEx log). Try again in a moment.";
         }
 
         private static string SavedDetail(SavedLoadouts.Saved saved)
@@ -1383,8 +1434,9 @@ namespace VoidCrewShipCustomizer
         /// <summary>
         /// Replaces the CUSTOM loadout (or only its storage racks) with one this player saved, one of the game's loadouts,
         /// or an empty ship; with Void Crew Fleet, also another player ship's (only the same team's in a Fleet Battle).
+        /// Opened from the racks window (<paramref name="storageOnly"/>), it opens over it, and a pick goes back to it.
         /// </summary>
-        private static void OpenLoadPicker(HullInfo hull, bool storageOnly)
+        private static void OpenLoadPicker(HullInfo hull, bool storageOnly, string tab = null)
         {
             var entries = new List<PickerPanel.Entry>
             {
@@ -1495,36 +1547,50 @@ namespace VoidCrewShipCustomizer
             }
             if (!storageOnly)
             {
-                entries.Add(new PickerPanel.Entry
+                entries.Add(EmptyEntry(hull, "EMPTY ALL HARDPOINTS", "Take every module and weapon off the ship.", c =>
                 {
-                    Name = "EMPTY ALL HARDPOINTS",
-                    Detail = "Take every module and weapon off the ship.",
-                    Category = "EMPTY",
-                    OnPick = () => Edit(hull, c =>
-                    {
-                        c.Slots.Clear();
-                        c.Contents.Clear();
-                    })
-                });
-                entries.Add(new PickerPanel.Entry { Name = "EMPTY ALL STORAGE RACKS", Detail = "Start with nothing on the racks.", Category = "EMPTY", OnPick = () => Edit(hull, EmptyStorage) });
-                entries.Add(new PickerPanel.Entry
+                    c.Slots.Clear();
+                    c.Contents.Clear();
+                }));
+                entries.Add(EmptyEntry(hull, "EMPTY ALL STORAGE RACKS", "Start with nothing on the racks.", EmptyStorage));
+                entries.Add(EmptyEntry(hull, "EMPTY EVERYTHING", "No modules, nothing in storage, standard homunculus.", c =>
                 {
-                    Name = "EMPTY EVERYTHING",
-                    Detail = "No modules, nothing in storage, standard homunculus.",
-                    Category = "EMPTY",
-                    OnPick = () => Edit(hull, c =>
-                    {
-                        c.Slots.Clear();
-                        c.Contents.Clear();
-                        EmptyStorage(c);
-                        c.Homunculus = "";
-                    })
-                });
+                    c.Slots.Clear();
+                    c.Contents.Clear();
+                    EmptyStorage(c);
+                    c.Homunculus = "";
+                }));
             }
-            OpenPicker(storageOnly ? "LOAD STORAGE RACKS" : "LOAD LOADOUT",
+            OpenPicker(hull, storageOnly ? "LOAD STORAGE RACKS" : "LOAD LOADOUT",
                 storageOnly ? "Fill the racks from one of your saved loadouts or one of the game's loadouts."
                             : "Replace your CUSTOM loadout with one you saved, one of the game's loadouts, or an empty ship, then change what you like.",
-                entries, savedLoadouts.Count > 0 ? "SAVED" : null);
+                entries, tab ?? (savedLoadouts.Count > 0 ? "SAVED" : null), !storageOnly);
+        }
+
+        /// <summary>
+        /// One of LOAD LOADOUT's EMPTY choices. They empty the loadout everyone setting up the ship shares, so they act on a
+        /// second click (a VR pointer can land on the wrong row), as REPLACE and CLEAR do for saved loadouts.
+        /// </summary>
+        private static PickerPanel.Entry EmptyEntry(HullInfo hull, string name, string detail, Action<HullConfig> empty)
+        {
+            bool asking = Asking(hull, 0, name);
+            return new PickerPanel.Entry
+            {
+                Name = name,
+                Detail = detail,
+                Category = "EMPTY",
+                Tag = asking ? "CLICK AGAIN TO EMPTY" : "",
+                TagColor = Ui.Warning,
+                OnPick = () =>
+                {
+                    if (!Confirmed(hull, 0, name))
+                    {
+                        OpenLoadPicker(hull, false, "EMPTY");
+                        return;
+                    }
+                    Edit(hull, empty);
+                }
+            };
         }
 
         /// <summary>Copies a whole CUSTOM loadout (fabricator included), or only its storage racks, into the one being changed.</summary>
@@ -1601,6 +1667,8 @@ namespace VoidCrewShipCustomizer
                 bool fits = anyItem || Catalog.ShelfAccepts(shelf, option);
                 bool isCurrent = option.Code == currentCode;
                 bool notAllowed = MatchRules.WhyRefused(option) != null;
+                // The match rules first, then what the rack takes: the same tag a dragged copy shows on this slot.
+                string refusal = StoragePanel.RefusalTag(notAllowed, fits);
                 string rarity = Ui.RarityName(option.Rarity);
                 // A Blessed Homunculus on a rack shows its blessing, as in the HOMUNCULUS menu.
                 string blessing = Catalog.IsHomunculus(option.Code) ? Catalog.BlessingOf(option) : null;
@@ -1623,18 +1691,12 @@ namespace VoidCrewShipCustomizer
                     if (notAllowed) entry.TagColor = Ui.Warning;
                     entry.OnPick = () => { };
                 }
-                else if (notAllowed)
+                else if (refusal != null)
                 {
                     entry.Enabled = false;
-                    entry.Tag = MatchRules.NotAllowedTag;
+                    entry.Tag = refusal;
                     entry.TagColor = Ui.Warning;
-                }
-                else if (!fits)
-                {
-                    entry.Enabled = false;
-                    entry.Tag = StoragePanel.DoesntFitTag;
-                    entry.TagColor = Ui.Warning;
-                    refused++;
+                    if (refusal == StoragePanel.DoesntFitTag) refused++;
                 }
                 else
                 {
@@ -1651,7 +1713,7 @@ namespace VoidCrewShipCustomizer
             Option currentOption;
             string tab = !string.IsNullOrEmpty(currentCode) && Catalog.TryGetOption(currentCode, out currentOption) ? currentOption.Category : null;
             PickerPanel.TellApart(entries, VariantNote);
-            OpenPicker(shelf.Name + "  ·  SLOT " + (index + 1), subtitle, entries, tab, false, () => OpenItemPicker(hull, shelf, index));
+            OpenPicker(hull, shelf.Name + "  ·  SLOT " + (index + 1), subtitle, entries, tab, false, () => OpenItemPicker(hull, shelf, index));
         }
 
         private static void SetStorage(HullInfo hull, ShelfInfo shelf, int index, string code)
@@ -1681,14 +1743,16 @@ namespace VoidCrewShipCustomizer
             string name = RichText.Plain(item.Name);
             string slot = CustomLoadouts.PartName(hull, part);
             string why = MatchRules.WhyRefused(item);
-            if (why != null)
+            // Refused as the slot's list refuses it: the match rules first, then what the rack takes.
+            string refusal = StoragePanel.RefusalTag(why != null, Settings.AnyItemOnAnyRack.Value || Catalog.ShelfAccepts(to, item));
+            if (refusal == MatchRules.NotAllowedTag)
             {
                 Toast(name + " is " + MatchRules.NotAllowedTag + " (" + why.TrimEnd('.') + "), so it wasn't copied to " + slot + ".");
                 return;
             }
-            if (!Settings.AnyItemOnAnyRack.Value && !Catalog.ShelfAccepts(to, item))
+            if (refusal != null)
             {
-                Toast(name + " wasn't copied to " + slot + ": " + StoragePanel.DoesntFitTag + " (the rack normally refuses it; see the AnyItemOnAnyRack setting).");
+                Toast(name + " wasn't copied to " + slot + ": " + refusal + " (the rack normally refuses it; see the AnyItemOnAnyRack setting).");
                 return;
             }
             // Already there: nothing to change.
@@ -1721,7 +1785,7 @@ namespace VoidCrewShipCustomizer
                 return false;
             }
             int ship = CustomLoadouts.TerminalShip;
-            if (dragged == null && _pickerSeen != null && (_pickerSeenHull != hull.ShipGuid || _pickerSeenShip != ship))
+            if (dragged == null && _pickerSeen != null && (_pickerHull != hull || _pickerSeenShip != ship))
             {
                 // The terminal moved to another ship while the list was open (its lists are closed a moment later).
                 Toast("The terminal switched to another ship while this list was open, so your pick wasn't made. Pick again.");
@@ -1853,37 +1917,50 @@ namespace VoidCrewShipCustomizer
             }
         }
 
+        /// <param name="hull">The ship type the list is made for: its picks change that type's CUSTOM loadout.</param>
         /// <param name="reopen">
         /// Makes this list again (the same Open... call): after another player's change the open list is made again from
         /// the loadout as it is now, in place. Null for lists that don't show the loadout.
         /// </param>
-        private static void OpenPicker(string title, string subtitle, List<PickerPanel.Entry> entries, string tab, bool closeOthers = true, Action reopen = null)
+        private static void OpenPicker(HullInfo hull, string title, string subtitle, List<PickerPanel.Entry> entries, string tab, bool closeOthers = true, Action reopen = null)
         {
             VisualElement host = OverlayHost();
             if (host == null) return;
             if (_refreshingPicker)
             {
-                // Made again after another player's change: the same list (same title) is filled in again where it is, with
-                // its tab and scroll kept. A list about something else now (another module in that hardpoint) closes. From
-                // now on a pick is checked against the loadout this list shows (see Edit): the player sees the other change
-                // and picks knowing it. A change that comes after the list was filled in is still refused with who made it,
-                // as before (the first change wins), and so is a click on its way while the rows changed (PickerPanel).
-                if (_picker == null || !_picker.IsOpen || title != _pickerTitle) return;
+                // Made again after another player's change: the same list (same title, ship type and ship) is filled in again
+                // where it is, with its tab and scroll kept. A list about something else now (another module in that
+                // hardpoint) closes. From now on a pick is checked against the loadout this list shows (see Edit): the player
+                // sees the other change and picks knowing it. A change that comes after the list was filled in is still
+                // refused with who made it, as before (the first change wins), and so is a click on its way while the rows
+                // changed (PickerPanel).
+                if (!FillsInAgain(_picker != null && _picker.IsOpen, _pickerTitle, _pickerHull, _pickerSeenShip, title, hull, CustomLoadouts.TerminalShip)) return;
                 _pickerRefreshed = true;
                 _picker.Refresh(subtitle, entries);
-                _pickerSeen = _shownHull != null ? CustomLoadouts.ConfigToShow(_shownHull).Clone() : null;
+                _pickerSeen = CustomLoadouts.ConfigToShow(hull).Clone();
                 return;
             }
             if (closeOthers) CloseOverlays();
             else if (_picker != null) _picker.Close();
             // What the list was made from: a pick is checked against it (see Edit).
-            _pickerSeen = _shownHull != null ? CustomLoadouts.ConfigToShow(_shownHull).Clone() : null;
-            _pickerSeenHull = _shownHull != null ? _shownHull.ShipGuid : GUIDUnion.Empty();
+            _pickerSeen = hull != null ? CustomLoadouts.ConfigToShow(hull).Clone() : null;
+            _pickerHull = hull;
             _pickerSeenShip = CustomLoadouts.TerminalShip;
             _pickerReopen = reopen;
             _pickerTitle = title;
             _picker = new PickerPanel(host, title, subtitle, entries, tab, TeamColor());
             KeepToastOnTop();
+        }
+
+        /// <summary>
+        /// Whether a list made again after another player's change fills in the open one where it is: only the same list
+        /// (by its title), made for the same ship type and the same ship. Anything else means the open list is about
+        /// something that is gone, and it closes rather than show another loadout's rows (whose picks would be checked
+        /// against the wrong one).
+        /// </summary>
+        internal static bool FillsInAgain(bool open, string openTitle, HullInfo openHull, int openShip, string title, HullInfo hull, int ship)
+        {
+            return open && hull != null && title == openTitle && hull == openHull && ship == openShip;
         }
 
         /// <summary>
@@ -1907,6 +1984,7 @@ namespace VoidCrewShipCustomizer
             _picker.Close();
             _picker = null;
             _pickerSeen = null;
+            _pickerHull = null;
             _pickerReopen = null;
         }
 
@@ -1917,6 +1995,7 @@ namespace VoidCrewShipCustomizer
             _picker = null;
             _storage = null;
             _pickerSeen = null;
+            _pickerHull = null;
             _pickerReopen = null;
         }
 
@@ -1958,8 +2037,8 @@ namespace VoidCrewShipCustomizer
                 _toast.style.right = new Length(22, LengthUnit.Percent);
                 _toast.style.top = new Length(3, LengthUnit.Percent);
                 // The game's pop-up colours: dark grey with the light-blue outline.
-                _toast.style.backgroundColor = new Color(0.188f, 0.188f, 0.188f, 0.96f);
-                Ui.Border(_toast, 2, new Color(0.741f, 0.906f, 0.984f, 1f));
+                _toast.style.backgroundColor = Ui.MessageFill;
+                Ui.Border(_toast, 2, Ui.PopupOutline);
                 Ui.Padding(_toast, 10, 16);
                 _toastLabel = Ui.GameText("", "ui-text-size__medium");
                 _toastLabel.style.unityTextAlign = TextAnchor.MiddleCenter;
@@ -1977,14 +2056,30 @@ namespace VoidCrewShipCustomizer
 
         private static void WriteReportOnce()
         {
-            if (_reportWritten || Settings.WriteGameDataReport == null || !Settings.WriteGameDataReport.Value) return;
-            _reportWritten = true;
+            if (_reportWritten || _reportAsked || Settings.WriteGameDataReport == null || !Settings.WriteGameDataReport.Value) return;
             // Only after an update of the mod or the game: otherwise it would say the same again.
-            if (GameDataReport.UpToDate()) return;
+            if (GameDataReport.UpToDate())
+            {
+                _reportWritten = true;
+                return;
+            }
             VisualElement root = OverlayHost();
-            // Wait a moment so the terminal's layout has been calculated for the screen-layout part of the report.
-            if (root != null) root.schedule.Execute(() => GameDataReport.Write(root)).ExecuteLater(1500);
-            else GameDataReport.Write(null);
+            if (root == null)
+            {
+                _reportWritten = true;
+                GameDataReport.Write(null);
+                return;
+            }
+            // Wait a moment so the terminal's layout has been calculated for the screen-layout part of the report. Only
+            // counted as written once it is: a terminal gone before then (the hub left) leaves it to the next one.
+            _reportAsked = true;
+            root.schedule.Execute(() =>
+            {
+                _reportAsked = false;
+                if (_reportWritten) return;
+                _reportWritten = true;
+                GameDataReport.Write(root);
+            }).ExecuteLater(1500);
         }
     }
 }
