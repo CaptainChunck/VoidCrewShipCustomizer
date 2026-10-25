@@ -86,6 +86,14 @@ internal static class Program
         Method("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "Display", "def");
         Method("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnDestroy");
         Method("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnLeaveUI");
+        // 0.9.3: every player's terminal shows the room's choice when it changes and when they start using it.
+        Method("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "ShowSelection", "def");
+        Method("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnEnterUI");
+        Method("UI.ShipLoadoutTerminal.ShipLoadoutList", "ContainsLoadout", "loadoutDef");
+        Method("UI.ShipLoadoutTerminal.ShipLoadoutList", "OnShipEntryClicked", "ship");
+        Method("UI.ShipLoadoutTerminal.ShipLoadoutList", "ShipListSelected", "ship");
+        Method("UI.ShipLoadoutTerminal.ShipLoadoutList", "LoadoutPicked", "def");
+        Method("UI.ShipLoadoutTerminal.ShipLoadoutList", "Select", "def");
         Method("CG.Profile.PlayerRewardsCollection", "AddItem");
         Method("CG.Cloud.CloudRewardsProfileSync", "AddItem");
         Method("CG.Profile.PlayerAchievements", "SetAchievementComplete");
@@ -110,6 +118,7 @@ internal static class Program
         Field("UI.ShipLoadoutTerminal.ModuleLayout", "selectButton", "UnityEngine.UIElements.Button");
         Field("UI.ShipLoadoutTerminal.ModuleLayout", "moduleLayoutAnchor", "UnityEngine.UIElements.VisualElement");
         Field("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "root", "UnityEngine.UIElements.VisualElement");
+        Field("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "loadoutList", "UI.ShipLoadoutTerminal.ShipLoadoutList");
         Field("HubShipManager", "_currentShipSelected", "ResourceAssets.ShipLoadoutDataDef");
         Field("HubShipManager", "ShipSelectionChanged", "System.Action`1<ResourceAssets.ShipLoadoutDataDef>");
         Field("Client.Player.Interactions.ContextInfo", "headerTextDefaultable", "DefaultableLocalizedString");
@@ -590,8 +599,92 @@ internal static class Program
 
         MatchRuleChecks(plugin, config, hullInfo);
         SharedEditingChecks(plugin, config, sockets);
+        TerminalSyncChecks(plugin);
         ShareCodeChecks(plugin, config);
         SaveFileChecks(plugin, config);
+    }
+
+    // ------------------------------------------------------------------ 0.9.3: everyone at the terminal sees the same loadout
+
+    private static void TerminalSyncChecks(Assembly plugin)
+    {
+        Console.WriteLine("Several players at the terminal:");
+        MethodInfo follows = plugin.GetType("VoidCrewShipCustomizer.TerminalUi", true).GetMethod("Follows", BindingFlags.NonPublic | BindingFlags.Static);
+        // Follows(showsNothing, showsLastChoice, showsStandIn, entering, choiceIsNew)
+        Func<bool, bool, bool, bool, bool, bool> follow = (nothing, last, standIn, entering, isNew) =>
+            (bool)follows.Invoke(null, new object[] { nothing, last, standIn, entering, isNew });
+        Check(follow(false, true, false, false, true), "a terminal still showing the room's last choice moves to the new one (another player's pick shows on every terminal)");
+        Check(follow(false, false, true, false, true), "a terminal showing the loadout CUSTOM stands in with moves to CUSTOM (the game names the stand-in a moment before CUSTOM's word arrives)");
+        Check(!follow(false, false, false, false, true), "a player looking at another loadout isn't moved while the room's choice changes");
+        Check(follow(false, false, false, true, true) && !follow(false, false, false, true, false),
+            "starting to use the terminal shows a choice made since it was last shown, and leaves a player's own browsing alone otherwise");
+        Check(follow(true, false, false, false, false), "a terminal that shows nothing yet shows the room's choice");
+
+        // (Anything that asks Photon about the room can't run without the game.)
+        Type custom = plugin.GetType("VoidCrewShipCustomizer.CustomLoadouts", true);
+        Check(custom.GetMethod("RoomChoice").Invoke(null, new object[] { 2 }) == null, "without Void Crew Fleet no choice is known for ship 2");
+
+        // Different items with the same name (the game has two of several payload batteries) are told apart in the lists.
+        Console.WriteLine("Items with the same name in the lists:");
+        Type panel = plugin.GetType("VoidCrewShipCustomizer.PickerPanel", true);
+        Type entryType = plugin.GetType("VoidCrewShipCustomizer.PickerPanel+Entry", true);
+        Func<string, string, string, bool, object> entry = (name, detail, code, pinned) =>
+        {
+            object e = Activator.CreateInstance(entryType);
+            entryType.GetField("Name").SetValue(e, name);
+            entryType.GetField("Detail").SetValue(e, detail);
+            entryType.GetField("Code").SetValue(e, code);
+            entryType.GetField("Pinned").SetValue(e, pinned);
+            return e;
+        };
+        IList entries = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(entryType));
+        entries.Add(entry("EMPTY SLOT", "", null, true));
+        entries.Add(entry("Payload Battery: Cluster Missiles", "COMMON", "i:a", false));
+        entries.Add(entry("Payload Battery: Cluster Missiles", "COMMON", "i:b", false));
+        entries.Add(entry("Payload Battery: Cluster Missiles", "RARE", "i:c", false));
+        entries.Add(entry("Blessed Homunculus", "Improved Damage", "i:d", false));
+        entries.Add(entry("Blessed Homunculus", "Faster Repairs", "i:e", false));
+        entries.Add(entry("Placeholder", "", "c:f", false));
+        entries.Add(entry("Placeholder", "", "c:g", false));
+        Type noteFunc = typeof(Func<,>).MakeGenericType(entryType, typeof(string));
+        var notes = new Dictionary<string, string> { { "i:a", "in the game as PayloadBattery Cluster A" }, { "i:b", "in the game as PayloadBattery Cluster B" }, { "c:f", "same" }, { "c:g", "same" } };
+        Delegate noteOf = NoteDelegate(noteFunc, entryType, notes);
+        panel.GetMethod("TellApart", BindingFlags.NonPublic | BindingFlags.Static).Invoke(null, new object[] { entries, noteOf });
+        Func<int, string> detailOf = i => (string)entryType.GetField("Detail").GetValue(entries[i]);
+        Check(detailOf(1) == "COMMON  \u00b7  in the game as PayloadBattery Cluster A" && detailOf(2) == "COMMON  \u00b7  in the game as PayloadBattery Cluster B",
+            "two different items with the same name and rarity each say where they come from (got \"" + detailOf(1) + "\" and \"" + detailOf(2) + "\")");
+        Check(detailOf(3) == "RARE" && detailOf(4) == "Improved Damage" && detailOf(5) == "Faster Repairs" && detailOf(0) == "",
+            "rows that already read differently (another rarity, another blessing) and pinned rows are left as they are");
+        Check(detailOf(6) == "same (1)" && detailOf(7) == "same (2)", "rows that would still read the same are numbered (got \"" + detailOf(6) + "\" and \"" + detailOf(7) + "\")");
+        // An open list made again after another player's change holds clicks back only when something in it changed.
+        MethodInfo sameLook = panel.GetMethod("SameLook", BindingFlags.NonPublic | BindingFlags.Static);
+        Func<string, IList> list = tag =>
+        {
+            IList l = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(entryType));
+            l.Add(entry("Arc Shield MkIII", "1x1, EPIC", "m:a", false));
+            object fitted = entry("Power Generator MkIII", "1x1, EPIC", "m:b", false);
+            entryType.GetField("Tag").SetValue(fitted, tag);
+            l.Add(fitted);
+            return l;
+        };
+        Check((bool)sameLook.Invoke(null, new object[] { list("FITTED"), list("FITTED") }) && !(bool)sameLook.Invoke(null, new object[] { list("FITTED"), list("") }),
+            "a list made again that looks the same is seen as unchanged; one with a changed row isn't");
+        MethodInfo readable = plugin.GetType("VoidCrewShipCustomizer.Catalog", true).GetMethod("Readable", BindingFlags.NonPublic | BindingFlags.Static);
+        Check((string)readable.Invoke(null, new object[] { "PayloadBattery_ClusterMissile__T1" }) == "PayloadBattery ClusterMissile T1", "a game asset's name reads with spaces for underscores");
+    }
+
+    /// <summary>A Func&lt;Entry, string&gt; that looks the entry's code up in <paramref name="notes"/> (null when it isn't there).</summary>
+    private static Delegate NoteDelegate(Type funcType, Type entryType, Dictionary<string, string> notes)
+    {
+        System.Linq.Expressions.ParameterExpression e = System.Linq.Expressions.Expression.Parameter(entryType, "e");
+        Func<string, string> look = code =>
+        {
+            string note;
+            return code != null && notes.TryGetValue(code, out note) ? note : null;
+        };
+        System.Linq.Expressions.Expression body = System.Linq.Expressions.Expression.Invoke(System.Linq.Expressions.Expression.Constant(look),
+            System.Linq.Expressions.Expression.Field(e, entryType.GetField("Code")));
+        return System.Linq.Expressions.Expression.Lambda(funcType, body, e).Compile();
     }
 
     // ------------------------------------------------------------------ 0.7.0: Fleet Battle match rules, blessings

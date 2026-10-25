@@ -183,6 +183,8 @@ namespace VoidCrewShipCustomizer
         private static readonly Dictionary<string, string> SeenLayouts = new Dictionary<string, string>();
         private static readonly Dictionary<string, int> SentEdits = new Dictionary<string, int>();
         private static int _editNumber;
+        /// <summary>Other players: the log already says this host's CUSTOM loadouts arrived (once per host and room).</summary>
+        private static bool _toldLayoutsArrived;
 
         /// <summary>The room property with a player ship's CUSTOM choice: SC_Custom for ship 1, SC_Custom2 to SC_Custom6 for Fleet's.</summary>
         public static string CustomKeyOf(int ship)
@@ -429,8 +431,25 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>
+        /// Host, just before a mission starts: the players' changes that arrived since the last poll are saved first, so a
+        /// change made a moment before the start is on the ship it spawns. Never throws: the mission start must go on.
+        /// </summary>
+        public static void ApplyPendingEdits()
+        {
+            try
+            {
+                if (_room == null || !PhotonNetwork.InRoom || !PhotonNetwork.IsMasterClient || PhotonNetwork.CurrentRoom == null || PhotonNetwork.CurrentRoom.Name != _room) return;
+                ApplyEdits(_room);
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Saving the players' last CUSTOM changes before the mission", e);
+            }
+        }
+
+        /// <summary>
         /// A player other than the host: asks the host to save this change to its CUSTOM loadout and share it. The change
-        /// is the whole loadout, so if two players change the same one at once, the later change wins.
+        /// carries the loadout it was made against, so the host makes only this player's own changes, part by part.
         /// </summary>
         public static bool SendEdit(HullInfo hull, int ship, HullConfig config, bool followShip1, HullConfig seen)
         {
@@ -486,6 +505,7 @@ namespace VoidCrewShipCustomizer
             AppliedEdits.Clear();
             SeenLayouts.Clear();
             SentEdits.Clear();
+            _toldLayoutsArrived = false;
         }
 
         /// <summary>Clears this player's changes meant for the room it just left (Photon would carry them into the next one).</summary>
@@ -521,6 +541,8 @@ namespace VoidCrewShipCustomizer
             int me = PhotonNetwork.LocalPlayer != null ? PhotonNetwork.LocalPlayer.ActorNumber : -1;
             bool fleet = FleetLink.Running;
             bool changed = false;
+            // The first read from a host (just joined, or a new host) finds the loadouts as they are, changed by whoever.
+            bool firstRead = SeenLayouts.Count == 0;
             var present = new HashSet<string>();
             foreach (object rawKey in properties.Keys.ToList())
             {
@@ -532,7 +554,10 @@ namespace VoidCrewShipCustomizer
                 present.Add(key);
                 var json = properties[rawKey] as string;
                 string seen;
-                if (SeenLayouts.TryGetValue(key, out seen) && seen == json) continue;
+                // A loadout read for the first time from this host is how the room has it, not a change someone just made
+                // (unless a player's change is what made it: a ship's first loadout of its own).
+                bool known = SeenLayouts.TryGetValue(key, out seen);
+                if (known && seen == json) continue;
                 SeenLayouts[key] = json;
                 try
                 {
@@ -550,9 +575,14 @@ namespace VoidCrewShipCustomizer
                     CustomLoadouts.SetHostLayout(ship, hullGuid, layout != null ? layout.Config : null);
                     changed = true;
                     if (layout == null) continue;
+                    if (ship == 1 && !_toldLayoutsArrived)
+                    {
+                        _toldLayoutsArrived = true;
+                        Log.Info("The host shares its CUSTOM loadouts: what you change at the loadout terminal goes to the host, who saves it, and every player sees it.");
+                    }
                     if (mine && layout.Refused != null && layout.Refused.Count > 0) TerminalUi.Toast(RefusedMessage(layout.Refused));
                     // (An empty layout only carries a refusal for its player: nothing changed.)
-                    else if (!mine && layout.Config != null) CustomLoadouts.OnChangedByOther(NameOfActor(layout.By), ship, hullGuid);
+                    else if (!mine && (known || (layout.By != 0 && !firstRead)) && layout.Config != null) CustomLoadouts.OnChangedByOther(NameOfActor(layout.By), ship, hullGuid);
                 }
                 catch (Exception e)
                 {
@@ -986,6 +1016,9 @@ namespace VoidCrewShipCustomizer
             if (hull != null) Log.Info("The host chose a CUSTOM " + hull.Name + (ship >= 2 ? " for " + FleetLink.ShipName(ship) : "") + ": " + CustomLoadouts.Describe(config) + ".");
             if (ship == 1) TerminalUi.OnSelectionChangedRemotely();
             else TerminalUi.OnLoadoutChangedRemotely();
+            // A terminal setting up this ship shows the room's new choice (ship 1's also follows through the game's own
+            // notice of it; ships 2 to 6 only through this).
+            TerminalUi.OnRoomChoiceChanged(ship);
         }
     }
 }

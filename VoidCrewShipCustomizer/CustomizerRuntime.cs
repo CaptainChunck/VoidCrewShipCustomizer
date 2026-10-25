@@ -67,6 +67,15 @@ namespace VoidCrewShipCustomizer
 
             try
             {
+                TerminalUi.CatchUp();
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Showing the room's choice on the loadout terminal", e);
+            }
+
+            try
+            {
                 LoadoutStore.Flush(false);
             }
             catch (Exception e)

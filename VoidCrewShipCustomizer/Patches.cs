@@ -54,6 +54,10 @@ namespace VoidCrewShipCustomizer
             Patch("Gameplay.Hub.HubQuestManager", "StartQuest", nameof(StartQuestPrefix), null);
             Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnDestroy", nameof(TerminalDestroyPrefix), null);
             Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnLeaveUI", null, nameof(TerminalLeavePostfix));
+            // Every player's terminal shows the room's choice when it changes, and when they start using the terminal, so
+            // players setting up a ship together look at the same loadout (the game's terminal only marks a new choice).
+            Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "ShowSelection", null, nameof(ShowSelectionPostfix));
+            Patch("UI.ShipLoadoutTerminal.ShipLoadoutTerminal", "OnEnterUI", null, nameof(TerminalEnterPostfix));
             // During a CUSTOM run the storage racks take any item, as the CUSTOM editor lets them start with any item.
             Patch("CG.Ship.Hull.CarryablesSocket", "DoesAccept", nameof(RackAcceptsPrefix), null);
             // A CUSTOM ship's racks hold exactly what was chosen, checked right after the ship spawns.
@@ -249,6 +253,8 @@ namespace VoidCrewShipCustomizer
             try
             {
                 CustomizerRuntime.GameReady = true;
+                // Host: the players' last changes are on the ships (it never throws).
+                RoomSync.ApplyPendingEdits();
                 LoadoutStore.Flush(true);
                 CustomLoadouts.OnMissionStarting(gameSession, preservedGameSession);
             }
@@ -444,6 +450,31 @@ namespace VoidCrewShipCustomizer
             catch (Exception e)
             {
                 Log.Failure("Closing the Ship Customizer pop-ups", e);
+            }
+        }
+
+        /// <summary>The game told the terminal about ship 1's new choice (it only marks it in the list).</summary>
+        private static void ShowSelectionPostfix(LoadoutTerminal __instance)
+        {
+            try
+            {
+                TerminalUi.OnShipOneChoiceShown(__instance);
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Showing the room's choice on the loadout terminal", e);
+            }
+        }
+
+        private static void TerminalEnterPostfix(LoadoutTerminal __instance)
+        {
+            try
+            {
+                TerminalUi.OnEnteredTerminal(__instance);
+            }
+            catch (Exception e)
+            {
+                Log.Failure("Showing the room's choice as the terminal is used", e);
             }
         }
 

@@ -32,6 +32,8 @@ namespace VoidCrewShipCustomizer
             public bool Pinned;
             public ContextInfo Tooltip;
             public GUIDUnion TooltipGuid;
+            /// <summary>The code of the module, weapon or item the row stands for, if any (see <see cref="TellApart"/>).</summary>
+            public string Code;
             public Action OnPick;
         }
 
@@ -59,6 +61,11 @@ namespace VoidCrewShipCustomizer
         private const int ManyRows = 100;
         /// <summary>How long after opening a click in the window is still taken for the click that opened it.</summary>
         private const float PickDelaySeconds = 0.35f;
+        /// <summary>
+        /// How long after the list was filled in again (another player's change) a click isn't taken for a pick: a click
+        /// that started on a row before could end on the same row showing another entry.
+        /// </summary>
+        private const float RefreshPickDelaySeconds = 0.2f;
 
         private static readonly Stack<Row> Pool = new Stack<Row>();
         /// <summary>The template the pooled rows were made from (a new terminal can bring a new one).</summary>
@@ -66,13 +73,16 @@ namespace VoidCrewShipCustomizer
 
         private readonly VisualElement _host;
         private readonly VisualElement _backdrop;
+        private readonly Label _subtitle;
         private readonly VisualElement _tabs;
         private readonly ScrollView _scroll;
-        private readonly List<Entry> _entries;
+        private List<Entry> _entries;
         private readonly Dictionary<string, VisualElement> _tabButtons = new Dictionary<string, VisualElement>();
+        private List<string> _categories = new List<string>();
         private readonly List<Row> _rows = new List<Row>();
         private string _tab;
         private float _openedAt;
+        private float _refreshedAt = -100f;
 
         public Action Closed;
 
@@ -107,13 +117,12 @@ namespace VoidCrewShipCustomizer
             });
             VisualElement body = Ui.GameWindow(_backdrop, title, Close, team, 17, 6);
 
-            if (!string.IsNullOrEmpty(subtitle))
-            {
-                Label sub = Ui.GameText(subtitle, "ui-text-size__medium");
-                sub.style.unityTextAlign = TextAnchor.MiddleCenter;
-                sub.style.flexShrink = 0;
-                body.Add(sub);
-            }
+            // Always there (hidden while empty), so the list can be filled in again with another subtitle (see Refresh).
+            _subtitle = Ui.GameText(subtitle ?? "", "ui-text-size__medium");
+            _subtitle.style.unityTextAlign = TextAnchor.MiddleCenter;
+            _subtitle.style.flexShrink = 0;
+            _subtitle.style.display = string.IsNullOrEmpty(subtitle) ? DisplayStyle.None : DisplayStyle.Flex;
+            body.Add(_subtitle);
 
             _tabs = new VisualElement();
             _tabs.style.flexDirection = FlexDirection.Row;
@@ -130,20 +139,93 @@ namespace VoidCrewShipCustomizer
             _scroll.horizontalScrollerVisibility = ScrollerVisibility.Hidden;
             body.Add(_scroll);
 
-            List<string> categories = entries.Where(e => !e.Pinned && !string.IsNullOrEmpty(e.Category)).Select(e => e.Category).Distinct().ToList();
-            if (categories.Count > 1) AddTab(AllTab);
-            foreach (string category in categories) AddTab(category);
-            // A long list (every item for a rack slot) opens on its first tab rather than ALL: hundreds of rows at once make
-            // the window slow to open, in VR above all.
-            string opening = entries.Count(e => !e.Pinned) > ManyRows ? categories.FirstOrDefault() : AllTab;
-            _tab = categories.Count > 1 ? (categories.Contains(initialTab) ? initialTab : opening) : null;
+            MakeTabs(Categories(entries), initialTab);
             _openedAt = Time.unscaledTime;
-            // The tab the window opens on is highlighted from the start, not only once another one is clicked.
-            foreach (string key in _tabButtons.Keys) StyleTab(key);
 
             host.Add(_backdrop);
             Ui.Announce(_backdrop);
             Rebuild();
+        }
+
+        /// <summary>The tabs a list has: one per category of its (not pinned) entries, in their order.</summary>
+        private static List<string> Categories(List<Entry> entries)
+        {
+            return entries.Where(e => !e.Pinned && !string.IsNullOrEmpty(e.Category)).Select(e => e.Category).Distinct().ToList();
+        }
+
+        /// <summary>The category tabs (ALL first when there are several), opening on <paramref name="wantedTab"/> when it is one of them.</summary>
+        private void MakeTabs(List<string> categories, string wantedTab)
+        {
+            _tabs.Clear();
+            _tabButtons.Clear();
+            _categories = categories;
+            if (categories.Count > 1) AddTab(AllTab);
+            foreach (string category in categories) AddTab(category);
+            // A long list (every item for a rack slot) opens on its first tab rather than ALL: hundreds of rows at once make
+            // the window slow to open, in VR above all.
+            string opening = _entries.Count(e => !e.Pinned) > ManyRows ? categories.FirstOrDefault() : AllTab;
+            _tab = categories.Count > 1 ? (wantedTab == AllTab || categories.Contains(wantedTab) ? wantedTab : opening) : null;
+            // The tab the window opens on is highlighted from the start, not only once another one is clicked.
+            foreach (string key in _tabButtons.Keys) StyleTab(key);
+        }
+
+        /// <summary>
+        /// Fills the open list in again with new entries, after another player changed the loadout it shows: its tab and how
+        /// far it is scrolled stay (the tabs are made again only if the categories changed), and a click that was on its
+        /// way while the rows changed isn't taken for a pick.
+        /// </summary>
+        public void Refresh(string subtitle, List<Entry> entries)
+        {
+            if (!IsOpen) return;
+            Vector2 offset = _scroll.scrollOffset;
+            // Nothing to see changed (the host's answer to this player's own pick, say): the rows show the same entries in the
+            // same places, so clicks aren't held back.
+            bool looksSame = (subtitle ?? "") == _subtitle.text && SameLook(_entries, entries);
+            _subtitle.text = subtitle ?? "";
+            _subtitle.style.display = string.IsNullOrEmpty(subtitle) ? DisplayStyle.None : DisplayStyle.Flex;
+            _entries = entries;
+            List<string> categories = Categories(entries);
+            if (!categories.SequenceEqual(_categories)) MakeTabs(categories, _tab);
+            if (!looksSame) _refreshedAt = Time.unscaledTime;
+            Rebuild();
+            ScrollTo(offset);
+        }
+
+        /// <summary>Whether two lists of entries look the same, row for row (what they do when picked aside).</summary>
+        internal static bool SameLook(List<Entry> a, List<Entry> b)
+        {
+            if (a == null || b == null || a.Count != b.Count) return false;
+            for (int i = 0; i < a.Count; i++)
+            {
+                Entry x = a[i];
+                Entry y = b[i];
+                if (x.Name != y.Name || x.Detail != y.Detail || x.DetailBright != y.DetailBright || x.Info != y.Info || !ReferenceEquals(x.Icon, y.Icon) || x.Accent != y.Accent ||
+                    x.Tag != y.Tag || x.TagColor != y.TagColor || x.Enabled != y.Enabled || x.Current != y.Current || x.Category != y.Category ||
+                    x.Pinned != y.Pinned || x.Code != y.Code || (x.OnPick == null) != (y.OnPick == null)) return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Different things can share a name: the game has two of several payload batteries (one of each in two
+        /// categories), and mods add their own items. List rows that would read exactly the same (name and detail line)
+        /// each get what tells them apart (<paramref name="noteOf"/>: where the item comes from) at the end of their
+        /// detail line, numbered when even that is the same, instead of one of them being hidden.
+        /// </summary>
+        internal static void TellApart(IList<Entry> entries, Func<Entry, string> noteOf)
+        {
+            foreach (IGrouping<string, Entry> same in entries.Where(e => !e.Pinned && !e.Info).GroupBy(e => (e.Name ?? "") + "\n" + (e.Detail ?? "")).Where(g => g.Count() > 1).ToList())
+            {
+                List<Entry> group = same.ToList();
+                List<string> notes = group.Select(e => noteOf(e) ?? "").ToList();
+                for (int i = 0; i < group.Count; i++)
+                {
+                    string note = notes[i];
+                    if (note.Length == 0) note = "variant " + (i + 1);
+                    else if (notes.Count(n => n == notes[i]) > 1) note += " (" + (i + 1) + ")";
+                    group[i].Detail = string.IsNullOrEmpty(group[i].Detail) ? note : group[i].Detail + "  ·  " + note;
+                }
+            }
         }
 
         /// <summary>The terminal is gone: its rows belong to its screen, so none are used again.</summary>
@@ -261,6 +343,7 @@ namespace VoidCrewShipCustomizer
             if (pick == null || !entry.Enabled || entry.Info) return;
             // The second click of a double-click (or a bouncing VR trigger) that opened this window isn't a pick in it.
             if (Time.unscaledTime - _openedAt < PickDelaySeconds) return;
+            if (Time.unscaledTime - _refreshedAt < RefreshPickDelaySeconds) return;
             Close();
             pick();
         }
