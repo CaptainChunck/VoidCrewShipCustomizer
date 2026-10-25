@@ -296,7 +296,7 @@ namespace VoidCrewShipCustomizer
                 var list = new List<Option>();
                 AddWeaponOptions(list);
                 AddModuleOptions(list);
-                _slotOptions = list.OrderBy(o => o.CategoryOrder).ThenBy(o => o.Rarity == RarityType.None ? 0 : (int)o.Rarity).ThenBy(o => o.Name, StringComparer.OrdinalIgnoreCase).ToList();
+                _slotOptions = EachCodeOnce(list).OrderBy(o => o.CategoryOrder).ThenBy(o => o.Rarity == RarityType.None ? 0 : (int)o.Rarity).ThenBy(o => o.Name, StringComparer.OrdinalIgnoreCase).ToList();
                 foreach (Option option in _slotOptions) ByCode[option.Code] = option;
                 Log.Info(string.Format("Found {0} weapons and {1} modules that fit in hardpoints ({2} ms).",
                     _slotOptions.Count(o => o.Kind == OptionKind.Weapon), _slotOptions.Count(o => o.Kind == OptionKind.Module), timer.ElapsedMilliseconds));
@@ -313,11 +313,69 @@ namespace VoidCrewShipCustomizer
                 var timer = Stopwatch.StartNew();
                 var list = new List<Option>();
                 AddItemOptions(list);
-                _itemOptions = list.OrderBy(o => o.CategoryOrder).ThenBy(o => o.Rarity == RarityType.None ? 0 : (int)o.Rarity).ThenBy(o => o.Name, StringComparer.OrdinalIgnoreCase).ToList();
+                _itemOptions = EachCodeOnce(list).OrderBy(o => o.CategoryOrder).ThenBy(o => o.Rarity == RarityType.None ? 0 : (int)o.Rarity).ThenBy(o => o.Name, StringComparer.OrdinalIgnoreCase).ToList();
                 foreach (Option option in _itemOptions) ByCode[option.Code] = option;
                 Log.Info(string.Format("Found {0} items for the storage racks ({1} ms).", _itemOptions.Count, timer.ElapsedMilliseconds));
                 return _itemOptions;
             }
+        }
+
+        /// <summary>
+        /// Each code once: a container that lists the same module, weapon or item twice (a mod adding it again, say) would
+        /// otherwise show it twice in the lists.
+        /// </summary>
+        private static IEnumerable<Option> EachCodeOnce(List<Option> options)
+        {
+            var codes = new HashSet<string>();
+            foreach (Option option in options)
+            {
+                if (codes.Add(option.Code)) yield return option;
+                else Log.InfoOnce("listed twice " + option.Code, "Listed " + RichText.Plain(option.Name) + " (" + option.Code + ") once: the game's list has it twice.");
+            }
+        }
+
+        /// <summary>
+        /// What tells a module, weapon or item apart from others of the same name, for the lists: the mod it comes from
+        /// (a mod's own), or the name the game itself gives its asset ("PayloadBattery_ClusterMissile_T1" read as
+        /// "PayloadBattery ClusterMissile T1"), or its id when neither is known.
+        /// </summary>
+        public static string VariantNote(Option option)
+        {
+            if (option == null) return null;
+            GUIDUnion guid = option.Guid;
+            try
+            {
+                RuntimeAssetsRegister register = RuntimeAssetsRegister.Instance;
+                if (register.HasAsset(guid))
+                {
+                    RuntimeAssetInfo info;
+                    string name = register.TryGetAssetInfo(guid, out info) && info != null ? (string.IsNullOrEmpty(info.DisplayName) ? info.Name : info.DisplayName) : null;
+                    if (string.IsNullOrEmpty(name) || name == RichText.Plain(option.Name))
+                    {
+                        UnityEngine.Object asset = register.GetAsset(guid);
+                        name = asset != null ? asset.name : null;
+                    }
+                    return "from a mod" + (string.IsNullOrEmpty(name) ? "" : ": " + Readable(name));
+                }
+                string path;
+                ResourcePaths paths = ResourcePaths.Instance;
+                if (paths != null && paths.TryGetPath(guid, out path) && !string.IsNullOrEmpty(path))
+                {
+                    string file = System.IO.Path.GetFileNameWithoutExtension(path);
+                    if (!string.IsNullOrEmpty(file)) return "in the game as " + Readable(file);
+                }
+            }
+            catch (Exception e)
+            {
+                Log.Verbose("Could not tell where " + option.Name + " comes from: " + e.Message);
+            }
+            return "id " + guid.AsHex().Substring(0, 8);
+        }
+
+        /// <summary>An asset name to read: underscores as spaces.</summary>
+        internal static string Readable(string name)
+        {
+            return string.Join(" ", (name ?? "").Split(new[] { '_', ' ' }, StringSplitOptions.RemoveEmptyEntries));
         }
 
         /// <summary>The homunculus variants the game's own loadouts use (each Blessed Homunculus suits its loadout).</summary>

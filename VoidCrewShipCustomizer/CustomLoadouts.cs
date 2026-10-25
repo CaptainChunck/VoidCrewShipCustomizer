@@ -299,7 +299,8 @@ namespace VoidCrewShipCustomizer
         /// <summary>
         /// The loadout to show for a ship, for the ship the terminal is setting up. The host shows its own. Other players
         /// show the host's when it shares them (0.5.0 on); with an older host, the host's while the room uses it,
-        /// otherwise their own.
+        /// otherwise their own. In the room of a host that shares them, this player's own saved CUSTOM is never shown as
+        /// the room's: until the host's has arrived (a moment after joining) the ship type's plain stand-in loadout is.
         /// </summary>
         public static HullConfig ConfigToShow(HullInfo hull)
         {
@@ -310,15 +311,31 @@ namespace VoidCrewShipCustomizer
                 if (shared != null) return shared;
                 HullConfig remote = RemoteConfigs[ship];
                 if (remote != null && RoomUses(hull)) return remote;
+                if (RoomSync.HostSharesLayouts()) return LoadoutStore.Default(hull);
             }
             return LoadoutStore.Get(hull, ship);
         }
 
-        /// <summary>Whether this player may change what the terminal shows for this ship.</summary>
+        /// <summary>
+        /// Whether this player may change what the terminal shows for this ship. In the room of a host that shares its
+        /// CUSTOM loadouts every change goes to the host, so nothing can be changed before the host's loadout of this ship
+        /// type has arrived: a change made then would only have gone into this player's own file, and been lost from
+        /// sight the moment the host's arrived.
+        /// </summary>
         public static bool CanEdit(HullInfo hull)
         {
-            if (!TeamMayEdit() || !HostKnowsTerminalShip()) return false;
+            if (!TeamMayEdit() || !HostKnowsTerminalShip() || WaitingForHost(hull)) return false;
             return PhotonNetwork.IsMasterClient || EditsGoToHost(hull) || RemoteConfigs[TerminalShip] == null || !RoomUses(hull);
+        }
+
+        /// <summary>
+        /// A player other than the host, in the room of a host that shares its CUSTOM loadouts (0.5.0 on), before the
+        /// host's loadout of this ship type has arrived. It comes a moment after joining, or after the first player with
+        /// Ship Customizer has joined the host.
+        /// </summary>
+        public static bool WaitingForHost(HullInfo hull)
+        {
+            return !PhotonNetwork.IsMasterClient && RoomSync.HostSharesLayouts() && !HostLayouts[1].ContainsKey(hull.ShipGuid);
         }
 
         /// <summary>
@@ -346,6 +363,8 @@ namespace VoidCrewShipCustomizer
                 return team != null ? "This is the " + team + " team's ship: only its players can change it." : "Only this ship's team can change it.";
             }
             if (!HostKnowsTerminalShip()) return "The host's Ship Customizer is older than 0.9.0, so ships 3 to 6 can't use CUSTOM.";
+            // With a host that shares its CUSTOM loadouts, the only reason left is that its loadout hasn't arrived yet.
+            if (RoomSync.HostSharesLayouts()) return "The host's CUSTOM loadout of this ship is still on its way. Try again in a moment.";
             return "This is the host's CUSTOM loadout, and the host's Ship Customizer is older than 0.5.0, so only the host can change it.";
         }
 
@@ -780,11 +799,42 @@ namespace VoidCrewShipCustomizer
         }
 
         /// <summary>
+        /// The room's choice for a player ship as the terminal lists it (CUSTOM rather than the loadout standing in for
+        /// it), or null when it isn't known here. Ship 1's is the game's own selection. Ships 2 to 6 (Void Crew Fleet) are
+        /// known only while they use CUSTOM: Fleet keeps their other choices.
+        /// </summary>
+        public static ShipLoadoutDataDef RoomChoice(int ship)
+        {
+            if (ship <= 1)
+            {
+                // The game's selection, which the CurrentShipSelected postfix turns into CUSTOM when CUSTOM stands behind it.
+                HubShipManager manager = HubShipManager.Instance;
+                return manager != null ? manager.CurrentShipSelected : null;
+            }
+            ShipLoadoutDataDef def;
+            return ValidShip(ship) && !ActiveShips[ship].IsNull && TryGetDef(ActiveShips[ship], out def) ? def : null;
+        }
+
+        /// <summary>
+        /// Whether a loadout is the one a CUSTOM loadout stands in with (shown to players without the mod). A player's
+        /// terminal can show it for a moment as the room's choice: the game tells every player about the stand-in a little
+        /// before the room property saying CUSTOM stands behind it arrives.
+        /// </summary>
+        public static bool IsStandInFor(ShipLoadoutDataDef shown, ShipLoadoutDataDef custom)
+        {
+            HullInfo hull;
+            return shown != null && TryGetHull(custom, out hull) && hull.BasePreset != null && shown.AssetGuid == hull.BasePreset.AssetGuid;
+        }
+
+        /// <summary>
         /// Void Crew Fleet switched the ship the terminal sets up; every CUSTOM definition now shows that ship's layout.
         /// Without Fleet running (here and on the host) there are no other ships, so the terminal stays on ship 1.
         /// </summary>
         public static void SetTerminalShip(int ship)
         {
+            // Fleet shows the ship's choice straight after this, in the same frame: the terminal takes it as the choice it
+            // follows (see TerminalUi.FollowRoomChoice).
+            TerminalUi.ExpectChoiceShown();
             if (!ValidShip(ship)) ship = 1;
             if (ship >= 2 && !FleetLink.Running)
             {
@@ -1122,7 +1172,9 @@ namespace VoidCrewShipCustomizer
             Refresh(hull);
             RoomSync.PublishCustom(ship, hull, LoadoutStore.Get(hull, ship));
             ModdingUtils.RegisterSessionMod();
-            if (changed) Log.Info(FleetLink.ShipName(ship) + "'s loadout is now its CUSTOM " + hull.Name + " (" + Describe(LoadoutStore.Get(hull, ship)) + ").");
+            if (!changed) return;
+            Log.Info(FleetLink.ShipName(ship) + "'s loadout is now its CUSTOM " + hull.Name + " (" + Describe(LoadoutStore.Get(hull, ship)) + ").");
+            TerminalUi.OnRoomChoiceChanged(ship);
         }
 
         /// <summary>Host: one of Void Crew Fleet's ships uses a game loadout (or none).</summary>
