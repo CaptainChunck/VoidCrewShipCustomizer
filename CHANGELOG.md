@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.9.5
+
+- **A pick the host's settings don't allow is refused instead of emptying the slot:** when the host has
+  Rules > AllowAnySize or AnyItemOnAnyRack set stricter than yours, the hardpoint or rack slot no longer ends up empty
+  for everyone; your pick isn't made, and you're told why.
+- **Changing a part and quickly changing it back** (before the host's answer came back) now ends as your terminal shows
+  it, instead of jumping back to your first change.
+- **"NAME changed CUSTOM ..." only when something changed:** a refused change, or the same change again, no longer shows
+  that message to everyone or redraws every terminal.
+- **The message when a change isn't made says why:** someone got there first, the host's settings, one per ship, or the
+  other team's ship (with a host on 0.9.5).
+- **After a host change,** the terminal says WAITING FOR HOST until the new host's CUSTOM loadouts arrive, instead of
+  briefly showing the old host's as the new host's (with refusals and messages that weren't true), and the room's
+  CUSTOM choice shows the new host's loadout straight away (when the old host was on 0.9.5).
+- **Lists follow the ship type:** switching ship type with the terminal's next/previous keys closes an open CUSTOM list
+  or racks window made for the other type.
+- **Double-clicks and bouncing VR triggers** no longer open STORAGE, FABRICATOR, LOAD LOADOUT or a hardpoint's list and
+  close it again straight away.
+- **EMPTY ALL, EMPTY ALL HARDPOINTS, EMPTY ALL STORAGE RACKS and EMPTY EVERYTHING ask for a second click,** like REPLACE
+  and CLEAR, since they empty a loadout everyone shares. **LOAD RACKS** opens over the racks window and goes back to it.
+- **Racks window:** a click or press on a slot is no longer lost when another player's change redraws the window at that
+  moment.
+- **Saved loadouts:** a slot that couldn't be written keeps what it had, and the message says why; CLEAR says when it
+  didn't work.
+- **A save file another program held at start** is read again at the next save instead of never. You're told once that
+  your changes wait; once it reads, they're saved, a CUSTOM loadout you had saved is never written over with a change
+  made to a stand-in copy, and CUSTOM runs started meanwhile are remembered.
+- **Share codes** wrapped across lines by a chat or mail program now load.
+- A rack slot holding a Blessed Homunculus opens its list on that item's own tab.
+- With Void Crew Fleet, the host's own first change to a ship's CUSTOM is announced like any other.
+- Sturdier sharing: a ship type whose CUSTOM loadouts fail to share once is tried again (players were left WAITING FOR
+  HOST), and a problem in one of the host's room checks no longer stops the others, above all the check that everyone
+  has the mod.
+- **Faster:** reading the room no longer makes garbage four times a second, another player's change no longer rebuilds
+  the CUSTOM ship every frame while you're away from the terminal, and item lists, the racks window and HARDPOINTS do
+  less repeated work.
+- Correction to 0.9.3's notes: with Void Crew Fleet, a terminal set up for ship 2 to 6 moves along only when CUSTOM is
+  chosen for that ship; another choice is marked in the list but not shown. Ship 1 follows every choice.
+
 ## 0.9.4
 
 - **Saves are tried again:** if a virus scanner or backup tool holds the save file for a moment, your last CUSTOM changes
