@@ -1126,7 +1126,8 @@ namespace VoidCrewShipCustomizer
             Option option;
             if (!Catalog.TryGetRackOption(code, out option))
             {
-                Log.WarnOnce("unknown " + code, "The CUSTOM " + hull.Name + " has a storage item the game no longer has (" + code + "); that rack slot is left empty.");
+                // Also a mod battery's inner payload saved before 0.9.3, which the customizer leaves out (it isn't an item).
+                Log.WarnOnce("unknown " + code, "The CUSTOM " + hull.Name + " has a storage item the customizer leaves out or the game no longer has (" + code + "); that rack slot is left empty.");
                 return new ShipAssetRef();
             }
             if (option.Kind == OptionKind.WeaponCrate)
