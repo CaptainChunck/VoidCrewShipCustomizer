@@ -43,7 +43,8 @@ Ship Customizer follows Void Crew's official modding guidelines for sandbox mods
   you continue it.
 - The CUSTOM loadouts are the host's: everyone sees and changes them, and the changes are saved on the host's PC. With a
   host on 0.4.0 or older, only the host can.
-- **Several players can change the same ship at once**: changes to different hardpoints, rack slots and settings all
+- **Several players can set up the same ship together**: every player's terminal shows the room's choice and follows it,
+  open lists update when someone else changes the loadout, changes to different hardpoints, rack slots and settings all
   stay, and when two players change the same thing at the same moment, the first change stays and the other player is
   told who got there first. Nobody's change is silently replaced.
 - During a CUSTOM run the storage racks take any item.

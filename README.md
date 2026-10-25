@@ -95,11 +95,14 @@ Ship Customizer follows Void Crew's
   only starts while everyone in the room has the mod.
 - The CUSTOM loadouts are the host's. Everyone sees and changes the host's, and the changes are saved on the host's PC.
   LOAD LOADOUT has your saved loadouts and **YOUR OWN CUSTOM**, to bring in what's on your PC.
-- **Several players can change the same ship at once.** Changes are made part by part (each hardpoint, each rack slot,
-  the homunculus, the alloys, the fabricator level), so changes to different parts all stay. If two players change the
-  same part at the same moment, the first change stays and the other player is told who got there first, so nobody's
-  change is silently replaced. A pick from a list whose part changed while the list was open isn't made either. Everyone
-  is told who changed the loadout.
+- **Several players can set up the same ship together.** Every player's terminal shows what the room has chosen for the
+  ship it sets up, and moves along when anyone picks another loadout or CUSTOM (not while you're looking at another
+  loadout; it catches up when you start using the terminal again). Open lists update when someone else changes the
+  loadout. Changes are made part by part (each hardpoint, each rack slot, the homunculus, the alloys, the fabricator
+  level), so changes to different parts all stay. If two players change the same part at the same moment, the first
+  change stays and the other player is told who got there first, so nobody's change is silently replaced. Everyone is
+  told who changed the loadout. Just after you join, the terminal says WAITING FOR HOST until the host's CUSTOM loadouts
+  arrive.
 - With a host on Ship Customizer 0.4.0 or older, only the host can choose or change CUSTOM; everyone else sees it.
 
 ## Manual install

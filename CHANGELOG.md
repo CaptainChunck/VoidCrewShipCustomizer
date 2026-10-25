@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.9.3
+
+- **Setting up a ship together works at the terminal.** Players' changes did reach the host, but every other terminal
+  kept showing what it showed before (often ROOKIE), so players looked at different loadouts and never saw each other's
+  CUSTOM changes.
+  - Every player's terminal now shows what the room has chosen for the ship it sets up, and moves along when anyone
+    picks another loadout or CUSTOM. A player looking at another loadout isn't moved; starting to use the terminal shows
+    a pick made meanwhile.
+  - Open CUSTOM lists (HARDPOINTS, a hardpoint's choices, CONTENTS, HOMUNCULUS, FABRICATOR, a rack slot's items, MATCH
+    RULES) update when someone else changes the loadout, and a pick made after that counts against what the list shows.
+    Two changes to the same part at the same moment still keep the first one, and the other player is told.
+  - Just after joining, the terminal says WAITING FOR HOST until the host's CUSTOM loadouts arrive. Before, a change made
+    then only went into your own file.
+  - With Void Crew Fleet, changing a ship's CUSTOM that the ship doesn't use yet (AS SHIP 1) tells you to SELECT it for
+    that ship.
+  - The host applies players' last changes right before the mission starts.
+  - Joining no longer shows "NAME changed CUSTOM ..." for changes made before you joined.
+- **Drag to copy in STORAGE:** press on a filled rack slot, hold, and drag it onto another slot (on the same rack or
+  another one) to copy its item there, replacing what was there. A click still opens the list. While you drag, the slot
+  under the item lights up, or turns red with the reason when it won't take it, and the list scrolls at its edges. A copy
+  is checked and shared like a pick. Works with a mouse and a VR laser.
+- **Storage items that looked doubled:**
+  - The game itself has two different items with the same name for several payload batteries (Cluster Missiles, Energy
+    Missile, Heavy Torpedo, Medium Missile, Proximity Mine). The lists now say what tells them apart.
+  - An item a list has twice is shown once.
+  - A mod battery's inner payload (Ectype Skirmisher's micromissile payload, named like its battery) is left out: it isn't
+    an item, and a rack that started with it held a loose warhead.
+- **Modules stuck after taking one apart** (left in the slot, switched off for good): that was Void Crew Fleet, not Ship
+  Customizer, and Void Crew Fleet 0.4.5 fixes it. A made-up share code can no longer put a weapon's core on a hardpoint
+  without its weapon data, which would have got stuck the same way.
+- Players on 0.9.2 can still play with 0.9.3 (no network change); they don't get the terminal following the room's
+  choice or the lists updating.
+
 ## 0.9.2
 
 - **Ready for Void Crew Fleet 0.4.2:** when Fleet refuses a request to change ship 1's loadout (in a Fleet Battle, from a
