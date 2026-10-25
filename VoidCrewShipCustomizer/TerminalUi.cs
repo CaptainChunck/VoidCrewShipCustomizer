@@ -1387,6 +1387,7 @@ namespace VoidCrewShipCustomizer
             CloseOverlays();
             _storage = new StoragePanel(host, hull, () => CustomLoadouts.ConfigToShow(hull), () => CustomLoadouts.CanEdit(hull), CustomLoadouts.WhyNotEditable, TeamColor(), NotAllowedInMatch,
                 (shelf, index) => OpenItemPicker(hull, shelf, index),
+                (from, fromIndex, to, toIndex, seen) => CopyStorage(hull, from, fromIndex, to, toIndex, seen),
                 action =>
                 {
                     if (action == "empty") Edit(hull, EmptyStorage);
@@ -1452,7 +1453,7 @@ namespace VoidCrewShipCustomizer
                 else if (!fits)
                 {
                     entry.Enabled = false;
-                    entry.Tag = "DOESN'T FIT THIS RACK";
+                    entry.Tag = StoragePanel.DoesntFitTag;
                     entry.TagColor = Ui.Warning;
                     refused++;
                 }
@@ -1475,17 +1476,44 @@ namespace VoidCrewShipCustomizer
 
         private static void SetStorage(HullInfo hull, ShelfInfo shelf, int index, string code)
         {
-            Edit(hull, c =>
+            Edit(hull, c => c.SetRackSlot(shelf.CoreIndex, shelf.Slots.Count, index, code), LayoutMerge.RackPart(shelf.CoreIndex, index));
+        }
+
+        /// <summary>
+        /// A filled rack slot was dragged onto another slot (of the same rack or another one): its item goes there too,
+        /// replacing what was there. The slot is checked as its list checks a pick (the match rules, what the rack takes,
+        /// whether this player may change the loadout), and changed the same way as a pick, against the window as it was
+        /// when the drag began: a slot someone else changed meanwhile keeps their change. So other players, Void Crew
+        /// Fleet's ships and the save see a copy just like a pick.
+        /// </summary>
+        private static void CopyStorage(HullInfo hull, ShelfInfo from, int fromIndex, ShelfInfo to, int toIndex, HullConfig seen)
+        {
+            if (hull == null || hull != _shownHull || from == null || to == null || seen == null || toIndex < 0 || toIndex >= to.Slots.Count) return;
+            if (!CustomLoadouts.CanEdit(hull))
             {
-                List<string> rack;
-                if (!c.Storage.TryGetValue(shelf.CoreIndex, out rack) || rack == null)
-                {
-                    rack = new List<string>();
-                    c.Storage[shelf.CoreIndex] = rack;
-                }
-                while (rack.Count < shelf.Slots.Count) rack.Add("");
-                rack[index] = code;
-            }, LayoutMerge.RackPart(shelf.CoreIndex, index));
+                Toast(CustomLoadouts.WhyNotEditable());
+                return;
+            }
+            string code = LayoutMerge.StateOf(seen, hull.Sockets, LayoutMerge.RackPart(from.CoreIndex, fromIndex));
+            string part = LayoutMerge.RackPart(to.CoreIndex, toIndex);
+            Option item;
+            if (code.Length == 0 || !Catalog.TryGetRackOption(code, out item)) return;
+            string name = RichText.Plain(item.Name);
+            string slot = CustomLoadouts.PartName(hull, part);
+            string why = MatchRules.WhyRefused(item);
+            if (why != null)
+            {
+                Toast(name + " is " + MatchRules.NotAllowedTag + " (" + why.TrimEnd('.') + "), so it wasn't copied to " + slot + ".");
+                return;
+            }
+            if (!Settings.AnyItemOnAnyRack.Value && !Catalog.ShelfAccepts(to, item))
+            {
+                Toast(name + " wasn't copied to " + slot + ": " + StoragePanel.DoesntFitTag + " (the rack normally refuses it; see the AnyItemOnAnyRack setting).");
+                return;
+            }
+            // Already there: nothing to change.
+            if (LayoutMerge.StateOf(seen, hull.Sockets, part) == code) return;
+            Edit(hull, c => c.SetRackSlot(to.CoreIndex, to.Slots.Count, toIndex, code), seen, part);
         }
 
         // ---------------------------------------------------------------- shared
@@ -1499,26 +1527,37 @@ namespace VoidCrewShipCustomizer
         /// </summary>
         private static bool Edit(HullInfo hull, Action<HullConfig> change, params string[] parts)
         {
+            return Edit(hull, change, null, parts);
+        }
+
+        /// <param name="dragged">For a copy dragged in the storage window: the loadout as the window showed it when the drag
+        /// began, which <paramref name="parts"/> are checked against instead of the open list (null for a pick or a button).
+        /// The window closes when the terminal switches ship, so a drag needs no check for that.</param>
+        private static bool Edit(HullInfo hull, Action<HullConfig> change, HullConfig dragged, params string[] parts)
+        {
             if (!CustomLoadouts.CanEdit(hull))
             {
                 Toast(CustomLoadouts.WhyNotEditable());
                 return false;
             }
             int ship = CustomLoadouts.TerminalShip;
-            if (_pickerSeen != null && (_pickerSeenHull != hull.ShipGuid || _pickerSeenShip != ship))
+            if (dragged == null && _pickerSeen != null && (_pickerSeenHull != hull.ShipGuid || _pickerSeenShip != ship))
             {
                 // The terminal moved to another ship while the list was open (its lists are closed a moment later).
                 Toast("The terminal switched to another ship while this list was open, so your pick wasn't made. Pick again.");
                 return false;
             }
-            if (parts.Length > 0 && _pickerSeen != null)
+            HullConfig seen = dragged ?? _pickerSeen;
+            if (parts.Length > 0 && seen != null)
             {
                 HullConfig now = CustomLoadouts.ConfigToShow(hull);
-                string moved = parts.FirstOrDefault(p => LayoutMerge.StateOf(_pickerSeen, hull.Sockets, p) != LayoutMerge.StateOf(now, hull.Sockets, p));
+                string moved = parts.FirstOrDefault(p => LayoutMerge.StateOf(seen, hull.Sockets, p) != LayoutMerge.StateOf(now, hull.Sockets, p));
                 if (moved != null)
                 {
                     Toast(CustomLoadouts.LastEditorOf(hull, moved) + " changed " + CustomLoadouts.PartName(hull, moved) +
-                          " while this list was open, so your pick wasn't made. Have a look and pick again.");
+                          (dragged != null
+                              ? " while you were dragging, so your copy wasn't made. Have a look and drag again."
+                              : " while this list was open, so your pick wasn't made. Have a look and pick again."));
                     if (_storage != null && _storage.IsOpen) _storage.Refresh();
                     return false;
                 }
